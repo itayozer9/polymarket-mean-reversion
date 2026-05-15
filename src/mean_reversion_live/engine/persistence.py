@@ -22,12 +22,19 @@ def atomic_write_json(path: Path, obj: Any) -> None:
 
 
 class JsonlAppender:
-    """Append-only jsonl writer with fsync. Thread-safe."""
+    """Append-only jsonl writer with fsync. Thread-safe.
 
-    def __init__(self, path: Path, fsync_every_n: int = 50):
+    `line_buffered=True` (default) forces OS-level flush on every write — use
+    this for durable records (trades). `line_buffered=False` uses block
+    buffering (~8KB) — use this for high-volume diagnostic logs (signals)
+    where losing the last few hundred entries on crash is acceptable.
+    """
+
+    def __init__(self, path: Path, fsync_every_n: int = 50, line_buffered: bool = True):
         self._path = path
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._fp = open(self._path, "a", buffering=1)  # line-buffered
+        buffering = 1 if line_buffered else -1
+        self._fp = open(self._path, "a", buffering=buffering)
         self._fsync_every = fsync_every_n
         self._n_since_fsync = 0
         self._lock = threading.Lock()

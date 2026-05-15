@@ -67,7 +67,11 @@ class StrategyHandle:
         sd = self.data_dir / "jsonl" / self.id
         sd.mkdir(parents=True, exist_ok=True)
         self.trade_log = JsonlAppender(sd / "trades.jsonl")
-        self.signal_log = JsonlAppender(sd / "signals.jsonl")
+        # Signals are diagnostic (hundreds per second across 8 strategies × N
+        # markets). Use block buffering + larger fsync window so each write
+        # doesn't trigger an OS flush; the engine consumer was queue-saturating
+        # because line-buffered writes turned this into ~200 syscalls/sec.
+        self.signal_log = JsonlAppender(sd / "signals.jsonl", fsync_every_n=500, line_buffered=False)
         self.snapshot_log = JsonlAppender(sd / "portfolio_snapshots.jsonl")
 
     @property
