@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+.env
+*.pid
+.collector.pid
+.paper_trader.pid
+
+# Data — too big for git, lives on disk
+data/
+logs/
+runs/
+
+# OS
+.DS_Store

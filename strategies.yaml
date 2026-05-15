@@ -1,0 +1,168 @@
+# Strategy registry. Source of truth for which strategies the paper engine runs.
+# Edit and SIGHUP the paper trader to hot-reload.
+#
+# `sim_config` matches `polymarket-arb/scripts/mean_reversion/config.py::SimConfig`.
+
+- id: cfg_21c8c00165b3
+  name: "Validated #1 — DOWN-only deep dip (88% WR backtest)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "DOWN"
+      entry_price_min: 0.075
+      entry_price_max: 0.125
+      drop_magnitude_pct: 15.0
+      drop_window_sec: 30
+      min_time_left_sec: 180
+      proximity_max_pct: 0.5
+      min_seconds_into_window: 15
+    exit:
+      profit_target_pct: 50.0
+      stop_loss_pct: 80
+      max_hold_sec: 180
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 0.0
+      max_spread: 0.10
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.0
+      reaction_delay_max_sec: 1.5
+      signal_skip_prob: 0.10
+      daily_trade_cap: 25
+      post_loss_cooldown_sec: 60
+      concurrent_position_cap: 1
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: cfg_333fde9cecb8
+  name: "Validated #2 — BOTH ASIA hours, trailing (93% WR backtest)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.05
+      entry_price_max: 0.15
+      drop_magnitude_pct: 15.0
+      drop_window_sec: 60
+      min_time_left_sec: 180
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 15
+    exit:
+      profit_target_pct: 75.0
+      stop_loss_pct: 50
+      max_hold_sec: 360
+      trailing_stop_pct: 25
+    filter:
+      min_book_depth_usd: 50.0
+      max_spread: 0.10
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ASIA"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.0
+      reaction_delay_max_sec: 0.5
+      signal_skip_prob: 0.10
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 180
+      concurrent_position_cap: 1
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: relaxed_v1
+  name: "Exploratory — wider band, no daily cap"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.05
+      entry_price_max: 0.25
+      drop_magnitude_pct: 10.0
+      drop_window_sec: 60
+      min_time_left_sec: 120
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 15
+    exit:
+      profit_target_pct: 50.0
+      stop_loss_pct: 50
+      max_hold_sec: 600
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 0.0
+      max_spread: 0.20
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.0
+      reaction_delay_max_sec: 1.0
+      signal_skip_prob: 0.0
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 0
+      concurrent_position_cap: null
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: cfg_5m_control
+  name: "5m baseline — expected to lose (engine sanity check)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "5m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.05
+      entry_price_max: 0.20
+      drop_magnitude_pct: 15.0
+      drop_window_sec: 30
+      min_time_left_sec: 60
+      proximity_max_pct: 1.0
+      min_seconds_into_window: 15
+    exit:
+      profit_target_pct: 50.0
+      stop_loss_pct: 50
+      max_hold_sec: 120
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 0.0
+      max_spread: 0.10
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.0
+      reaction_delay_max_sec: 1.5
+      signal_skip_prob: 0.10
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 60
+      concurrent_position_cap: 1
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
