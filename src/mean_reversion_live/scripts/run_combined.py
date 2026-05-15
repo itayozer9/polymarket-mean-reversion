@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import shutil
 import signal
 import time
 
 import structlog
 
+from mean_reversion_live.collectors.macro_writer import MacroCsvGzAppender
 from mean_reversion_live.collectors.outcome_writer import OutcomeWriter
 from mean_reversion_live.collectors.spot_collector import SpotPriceCache, spot_loop
 from mean_reversion_live.collectors.tick_writer import CrashSafeCsvGzAppender
@@ -26,6 +28,47 @@ from mean_reversion_live.logging_config import configure_logging
 from mean_reversion_live.markets.discovery import MarketDiscovery
 
 log = structlog.get_logger(__name__)
+
+
+def _count_signals_today(jsonl_root) -> int:
+    """Best-effort count of signal events written since UTC midnight today.
+
+    Uses file mtime + a single read of each signals.jsonl. Cheap enough at 5s
+    cadence. Returns 0 on any error.
+    """
+    try:
+        if not jsonl_root.exists():
+            return 0
+        midnight = int(dt.datetime.now(dt.timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).timestamp() * 1000)
+        total = 0
+        for sid_dir in jsonl_root.iterdir():
+            f = sid_dir / "signals.jsonl"
+            if not f.exists():
+                continue
+            # mtime ≥ midnight is the cheap pre-check; we still need to count
+            # only today's lines for accuracy, but if the file hasn't been
+            # touched since midnight we can skip it entirely.
+            try:
+                if f.stat().st_mtime * 1000 < midnight:
+                    continue
+            except OSError:
+                continue
+            try:
+                with open(f, "r") as fh:
+                    for line in fh:
+                        try:
+                            rec = json.loads(line)
+                            if rec.get("ts_ms", 0) >= midnight:
+                                total += 1
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+            except OSError:
+                continue
+        return total
+    except Exception:
+        return 0
 
 
 async def amain() -> None:
@@ -43,6 +86,7 @@ async def amain() -> None:
     # Writers
     tick_writer = CrashSafeCsvGzAppender(settings.live_data_path)
     outcome_writer = OutcomeWriter(settings.outcomes_path)
+    macro_writer = MacroCsvGzAppender(settings.data_path / "live_macro", symbols=settings.symbol_list)
 
     # Shared queue
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -96,11 +140,21 @@ async def amain() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         while not stop.is_set():
             try:
+                try:
+                    disk_free_gb = round(
+                        shutil.disk_usage(settings.data_path).free / (1024 ** 3), 2
+                    )
+                except OSError:
+                    disk_free_gb = None
+                signals_today = _count_signals_today(settings.jsonl_path)
                 hb = {
                     "ts_ms": int(time.time() * 1000),
                     "queue_size": tick_queue.qsize(),
                     "active_markets": len(discovery.active_markets),
                     "n_strategies": len(strategies),
+                    "books_in_memory": len(ws_collector._books),
+                    "disk_free_gb": disk_free_gb,
+                    "signals_today": signals_today,
                     "strategy_pnl": {s.id: round(s.portfolio.total_pnl, 3) for s in strategies},
                     "strategy_trades": {s.id: s.portfolio.n_trades for s in strategies},
                 }
@@ -115,6 +169,49 @@ async def amain() -> None:
             except asyncio.TimeoutError:
                 pass
 
+    async def macro_dumper():
+        """Every 1s, snapshot the engine's MarketContext and append a row to
+        data/live_macro/<date>.csv.gz. Joined with tick CSVs at review time
+        via ts_ms.
+        """
+        while not stop.is_set():
+            try:
+                ts_ms = int(time.time() * 1000)
+                snap = engine.market_context.snapshot(ts_ms)
+                row = {"ts_ms": ts_ms, **snap}
+                macro_writer.append(row)
+            except Exception as e:
+                log.warning("macro_dumper_failed", err=str(e))
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+
+    async def disk_watcher():
+        """Bail out gracefully if we're about to run out of disk.
+
+        A 7-day run can write tens of GB of tick CSVs. Hitting ENOSPC mid-gzip
+        corrupts the frame. We'd rather stop cleanly with 2GB free.
+        """
+        threshold_gb = 2.0
+        while not stop.is_set():
+            try:
+                free_gb = shutil.disk_usage(settings.data_path).free / (1024 ** 3)
+                if free_gb < threshold_gb:
+                    log.critical(
+                        "disk_low_stopping",
+                        free_gb=round(free_gb, 2),
+                        threshold_gb=threshold_gb,
+                    )
+                    stop.set()
+                    return
+            except OSError as e:
+                log.warning("disk_watcher_failed", err=str(e))
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=60.0)
+            except asyncio.TimeoutError:
+                pass
+
     tasks = [
         asyncio.create_task(spot_loop(spot_cache, settings.symbol_list, stop)),
         asyncio.create_task(discovery.run()),
@@ -122,6 +219,8 @@ async def amain() -> None:
         asyncio.create_task(engine.run()),
         asyncio.create_task(kill_watcher()),
         asyncio.create_task(heartbeat()),
+        asyncio.create_task(disk_watcher()),
+        asyncio.create_task(macro_dumper()),
     ]
     log.info("combined_running")
 
@@ -138,6 +237,7 @@ async def amain() -> None:
         except (asyncio.CancelledError, Exception):
             pass
     tick_writer.close()
+    macro_writer.close()
     log.info("combined_stopped")
 
 

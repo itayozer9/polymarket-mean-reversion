@@ -13,6 +13,7 @@ import numpy as np
 import structlog
 
 from mean_reversion_live.adapters.arb_imports import TICK_DTYPE
+from mean_reversion_live.engine.market_context import MarketContext
 from mean_reversion_live.engine.strategy import StrategyHandle
 
 log = structlog.get_logger(__name__)
@@ -54,6 +55,10 @@ class PaperEngine:
         self._data_dir = data_dir
         self._stop = asyncio.Event()
         self._last_snapshot_hour = -1
+        self.market_context = MarketContext()
+        # Wire each strategy's signal observer to read from our shared MarketContext.
+        for s in self.strategies:
+            s.set_macro_snapshot(self.market_context.snapshot)
 
     def stop(self) -> None:
         self._stop.set()
@@ -82,6 +87,15 @@ class PaperEngine:
         timeframe = _slug_to_timeframe(slug)
         window_duration = 300 if timeframe == "5m" else 900
         arr_row = _row_dict_to_struct(row)
+        # Feed the cross-symbol macro context (cheap, additive).
+        symbol = str(row.get("symbol") or "").lower()
+        if symbol:
+            self.market_context.update(
+                symbol=symbol,
+                yes_mid=float(row.get("yes_mid") or 0.0),
+                no_mid=float(row.get("no_mid") or 0.0),
+                ts_ms=int(row.get("timestamp_ms") or 0),
+            )
         outcome = None  # outcomes are resolved by the collector via outcomes.csv; we don't pass it through here
         for s in self.strategies:
             if not s.applies_to_tick(slug, timeframe):

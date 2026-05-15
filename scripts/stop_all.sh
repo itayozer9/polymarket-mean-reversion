@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Graceful shutdown via SIGTERM. Falls back to SIGKILL after 30s.
-set -euo pipefail
+# Dropped `set -u`: bash `for i in {1..30}` can interact oddly with strict mode
+# on some shells / terminals.
+set -eo pipefail
 
 cd "$(dirname "$0")/.."
 REPO="$(pwd)"

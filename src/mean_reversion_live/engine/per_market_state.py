@@ -8,15 +8,23 @@ Approach: buffer the last N ticks where N >= drop_window_sec + 5, then build
 the same numpy arrays + call `_precompute_features` / `_entry_features_at`
 that the batch simulator uses. This guarantees identical features and
 identical decisions.
+
+Optional `observer` callback (PARITY-SAFE):
+    Called once at the end of every on_tick via a try/finally block, AFTER
+    all rng draws and AFTER all state mutations. The callback receives a dict
+    summarizing what happened on this tick. It MUST NOT raise (we swallow);
+    it MUST NOT call rng. Use it for logging / analysis only.
 """
 from __future__ import annotations
 from collections import deque
-from typing import Deque, Optional, Tuple
+from dataclasses import replace
+from typing import Callable, Deque, Optional, Tuple
 
 import numpy as np
 
 from mean_reversion_live.adapters.arb_imports import (
     EntryFeatures,
+    EntryParams,
     Position,
     SimConfig,
     TICK_DTYPE,
@@ -36,6 +44,71 @@ from mean_reversion_live.adapters.arb_imports import (
 )
 
 
+# Single-param relaxation factors for near-miss detection. All checks are
+# applied independently; we report which one (if any) would have made the
+# signal fire on its own.
+_NEAR_MISS_DROP_FACTOR = 0.8     # require ≥ 80% of drop_magnitude_pct
+_NEAR_MISS_PROX_FACTOR = 1.5     # allow up to 1.5× proximity_max_pct
+_NEAR_MISS_TIME_FACTOR = 0.5     # require ≥ 50% of min_time_left_sec
+_NEAR_MISS_PRICE_FACTOR = 0.25   # widen the price band by ±25%
+
+
+def _detect_near_miss(
+    tick: TickEvent,
+    features: EntryFeatures,
+    entry: EntryParams,
+    filt,
+    window_duration_sec: int,
+) -> Optional[str]:
+    """Pure-function check: would relaxing exactly ONE entry param have fired the signal?
+
+    Returns the name of the relaxed param ("drop" | "prox" | "time" | "price") or None.
+    Performs no rng draws and mutates no state.
+    """
+    # drop relaxation
+    if entry.drop_magnitude_pct > 0:
+        relaxed = replace(entry, drop_magnitude_pct=entry.drop_magnitude_pct * _NEAR_MISS_DROP_FACTOR)
+        if entry_signal(tick, features, relaxed, filt, window_duration_sec) is not None:
+            return "drop"
+    # proximity relaxation
+    if entry.proximity_max_pct < 1e9:
+        relaxed = replace(entry, proximity_max_pct=entry.proximity_max_pct * _NEAR_MISS_PROX_FACTOR)
+        if entry_signal(tick, features, relaxed, filt, window_duration_sec) is not None:
+            return "prox"
+    # min_time_left relaxation
+    if entry.min_time_left_sec > 0:
+        relaxed = replace(entry, min_time_left_sec=int(entry.min_time_left_sec * _NEAR_MISS_TIME_FACTOR))
+        if entry_signal(tick, features, relaxed, filt, window_duration_sec) is not None:
+            return "time"
+    # price-band relaxation
+    new_lo = max(0.0, entry.entry_price_min * (1 - _NEAR_MISS_PRICE_FACTOR))
+    new_hi = min(1.0, entry.entry_price_max * (1 + _NEAR_MISS_PRICE_FACTOR))
+    relaxed = replace(entry, entry_price_min=new_lo, entry_price_max=new_hi)
+    if entry_signal(tick, features, relaxed, filt, window_duration_sec) is not None:
+        return "price"
+    return None
+
+
+def _features_to_dict(tick: TickEvent, features: EntryFeatures) -> dict:
+    return {
+        "yes_mid": tick.yes_mid,
+        "no_mid": tick.no_mid,
+        "spread_yes": tick.spread_yes,
+        "spread_no": tick.spread_no,
+        "yes_bid_depth": tick.yes_bid_depth,
+        "yes_ask_depth": tick.yes_ask_depth,
+        "yes_drop_pct": features.yes_drop_in_window * 100,
+        "no_drop_pct": features.no_drop_in_window * 100,
+        "proximity_pct": features.proximity,
+        "yes_book_imbalance": features.yes_book_imbalance,
+        "no_book_imbalance": features.no_book_imbalance,
+        "realized_vol_60s": features.realized_vol_60s,
+        "vol_bucket": features.vol_bucket,
+        "hour_bucket": features.hour_bucket,
+        "seconds_into_window": tick.seconds_into_window,
+    }
+
+
 class PerMarketState:
     """Tick-by-tick state machine for one (strategy, market) pair.
 
@@ -43,7 +116,13 @@ class PerMarketState:
     consumes ticks one at a time so a live WS stream can feed it.
     """
 
-    def __init__(self, slug: str, cfg: SimConfig, window_duration_sec: int):
+    def __init__(
+        self,
+        slug: str,
+        cfg: SimConfig,
+        window_duration_sec: int,
+        observer: Optional[Callable[[dict], None]] = None,
+    ):
         self.slug = slug
         self.cfg = cfg
         self.window_duration_sec = window_duration_sec
@@ -69,6 +148,9 @@ class PerMarketState:
         # delay logic produces the same delay_ticks count as the batch sim.
         self._tick_count = 0
 
+        # PARITY-SAFE observer hook. See module docstring.
+        self._observer = observer
+
     def on_tick(
         self,
         arr_row: np.ndarray,
@@ -76,10 +158,44 @@ class PerMarketState:
         rng: np.random.Generator,
         outcome: Optional[Tuple[str, float]] = None,
     ) -> Optional[Trade]:
-        """Consume one tick (numpy structured row of TICK_DTYPE).
+        """Consume one tick. Wraps `_on_tick_impl` to invoke the observer once
+        at the very end, AFTER all rng draws and state changes.
 
-        Returns a Trade if this tick closed a position, else None.
-        Mutates `portfolio` via on_entry / on_exit.
+        The observer is invoked via try/finally so it runs even if a downstream
+        bug raises — it never blocks the trade return path.
+        """
+        decision_event: dict = {
+            "ts_ms": int(arr_row["timestamp_ms"]),
+            "slug": self.slug,
+            "state_before": self.state,
+            "decision": "unknown",
+            "side_signal": None,
+            "near_miss": None,
+            "trade_closed": False,
+            "features": None,
+        }
+        trade: Optional[Trade] = None
+        try:
+            trade = self._on_tick_impl(arr_row, portfolio, rng, outcome, decision_event)
+            decision_event["trade_closed"] = trade is not None
+            return trade
+        finally:
+            decision_event["state_after"] = self.state
+            if self._observer is not None:
+                try:
+                    self._observer(decision_event)
+                except Exception:  # pragma: no cover — observers must not break the engine
+                    pass
+
+    def _on_tick_impl(
+        self,
+        arr_row: np.ndarray,
+        portfolio: Portfolio,
+        rng: np.random.Generator,
+        outcome: Optional[Tuple[str, float]],
+        decision: dict,
+    ) -> Optional[Trade]:
+        """The actual tick processor.
 
         IMPORTANT: this method must process EVERY tick, including the very first,
         so that the RNG draw sequence (signal_skip_prob, reaction_delay) matches
@@ -114,36 +230,52 @@ class PerMarketState:
                 self.position = None
                 self.state = "FLAT"
                 self._has_traded = True
+                decision["decision"] = f"trade_closed_{reason}"
                 return trade
+            decision["decision"] = "holding"
             return None
 
         # ───────── ARMED ─────────
         if self.state == "ARMED" and self._armed_side is not None:
             if i >= self._armed_until_idx:
                 if rng.random() < self.cfg.fill.reject_prob:
+                    armed_side = self._armed_side
                     self.state = "FLAT"
                     self._armed_side = None
                     self._has_traded = True
+                    decision["decision"] = "rejected_fill"
+                    decision["side_signal"] = armed_side
                     return None
                 pos = self._try_fill_entry(tick, self._armed_side)
                 if pos is None:
                     self.state = "FLAT"
+                    armed_side = self._armed_side
                     self._armed_side = None
                     self._has_traded = True
+                    decision["decision"] = "skipped_no_fill"
+                    decision["side_signal"] = armed_side
                     return None
                 self.position = pos
                 self.state = "HOLDING"
                 self._entry_seconds = tick.seconds_into_window
                 portfolio.on_entry(tick.timestamp_ms)
+                decision["decision"] = "fired"
+                decision["side_signal"] = self._armed_side
                 self._armed_side = None
+                return None
+            decision["decision"] = "armed_waiting"
+            decision["side_signal"] = self._armed_side
             return None
 
         # ───────── FLAT ─────────
         if self._has_traded:
+            decision["decision"] = "skipped_already_traded"
             return None
         if not portfolio.can_enter(tick.timestamp_ms):
+            decision["decision"] = "skipped_can_enter"
             return None
         if self.cfg.human.signal_skip_prob > 0 and rng.random() < self.cfg.human.signal_skip_prob:
+            decision["decision"] = "skipped_skip_prob"
             return None
         # Recompute features over the buffer. This is O(buf_size * drop_window_sec)
         # per tick but buf_size is tiny (35 for drop_window_sec=30) so it's cheap.
@@ -151,6 +283,12 @@ class PerMarketState:
         ef = _entry_features_at(precomp_local, i_local, tick.timestamp_ms)
         side = entry_signal(tick, ef, self.cfg.entry, self.cfg.filter, self.window_duration_sec)
         if side is None:
+            # Near-miss check (PURE — no rng, no state change).
+            decision["near_miss"] = _detect_near_miss(
+                tick, ef, self.cfg.entry, self.cfg.filter, self.window_duration_sec
+            )
+            decision["features"] = _features_to_dict(tick, ef)
+            decision["decision"] = "near_miss" if decision["near_miss"] else "flat"
             return None
         # ARM with reaction delay.
         delay_sec = rng.uniform(
@@ -161,6 +299,9 @@ class PerMarketState:
         self._armed_until_idx = i + delay_ticks
         self._armed_side = side
         self.state = "ARMED"
+        decision["decision"] = "armed_new"
+        decision["side_signal"] = side
+        decision["features"] = _features_to_dict(tick, ef)
         return None
 
     # ──────────────────────────────────────────────────────────────────────

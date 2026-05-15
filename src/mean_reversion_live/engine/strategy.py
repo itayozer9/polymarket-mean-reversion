@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 import numpy as np
 import structlog
@@ -12,6 +12,31 @@ from mean_reversion_live.engine.per_market_state import PerMarketState
 from mean_reversion_live.engine.persistence import JsonlAppender, atomic_write_json
 
 log = structlog.get_logger(__name__)
+
+
+# Decisions we always want in signals.jsonl, regardless of throttle.
+_ALWAYS_LOG_DECISIONS = frozenset({
+    "armed_new",
+    "armed_waiting",
+    "fired",
+    "rejected_fill",
+    "skipped_no_fill",
+    "trade_closed_profit_target",
+    "trade_closed_stop_loss",
+    "trade_closed_trailing_stop",
+    "trade_closed_max_hold",
+    "trade_closed_forced_resolution",
+})
+
+# Chatty decisions we throttle to 1/sec/slug.
+_THROTTLED_DECISIONS = frozenset({
+    "flat",
+    "near_miss",
+    "holding",
+    "skipped_already_traded",
+    "skipped_can_enter",
+    "skipped_skip_prob",
+})
 
 
 @dataclass
@@ -28,6 +53,10 @@ class StrategyHandle:
     trade_log: Optional[JsonlAppender] = None
     signal_log: Optional[JsonlAppender] = None
     snapshot_log: Optional[JsonlAppender] = None
+    # Macro-snapshot provider, injected by the paper engine. Returns a dict.
+    _macro_snapshot: Optional[Callable[[int], dict]] = None
+    # Per-slug throttle: ts of last logged event for each slug (in seconds).
+    _last_logged_sec_per_slug: Dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self):
         self.portfolio = Portfolio(human=self.cfg.human, bankroll=self.starting_capital_usd)
@@ -45,15 +74,72 @@ class StrategyHandle:
     def portfolio_path(self) -> Path:
         return self.data_dir / "portfolios" / f"{self.id}.json"
 
+    def set_macro_snapshot(self, fn: Callable[[int], dict]) -> None:
+        self._macro_snapshot = fn
+
     def applies_to_tick(self, market_slug: str, market_timeframe: str) -> bool:
         return market_timeframe == self.timeframe
 
     def get_or_create_state(self, slug: str, window_duration: int) -> PerMarketState:
         pms = self.states.get(slug)
         if pms is None:
-            pms = PerMarketState(slug=slug, cfg=self.cfg, window_duration_sec=window_duration)
+            pms = PerMarketState(
+                slug=slug,
+                cfg=self.cfg,
+                window_duration_sec=window_duration,
+                observer=self._observer,
+            )
             self.states[slug] = pms
         return pms
+
+    def _observer(self, event: dict) -> None:
+        """Receive a per-tick decision event from PerMarketState and (maybe) log it.
+
+        Throttling: chatty states (flat/near_miss/holding/skipped_*) are logged
+        at most once per second per slug. Important transitions (armed_new,
+        fired, rejected_fill, trade_closed_*) are ALWAYS logged.
+        """
+        decision = event.get("decision", "unknown")
+        slug = event.get("slug", "")
+        ts_ms = event.get("ts_ms", 0)
+        sec = ts_ms // 1000
+
+        if decision in _THROTTLED_DECISIONS:
+            last_sec = self._last_logged_sec_per_slug.get(slug, -1)
+            if last_sec == sec:
+                return
+            # Also drop "flat" entirely — it's the dominant decision and would
+            # explode the log file. We keep "near_miss" (which is interesting),
+            # "holding" (rare-ish), and "skipped_*" (rare).
+            if decision == "flat":
+                self._last_logged_sec_per_slug[slug] = sec
+                return
+
+        macro = {}
+        if self._macro_snapshot is not None:
+            try:
+                macro = self._macro_snapshot(ts_ms)
+            except Exception:
+                macro = {}
+
+        record = {
+            "ts_ms": ts_ms,
+            "strategy_id": self.id,
+            "slug": slug,
+            "decision": decision,
+            "side_signal": event.get("side_signal"),
+            "near_miss": event.get("near_miss"),
+            "state_before": event.get("state_before"),
+            "state_after": event.get("state_after"),
+            "trade_closed": event.get("trade_closed", False),
+            "features": event.get("features"),
+            "macro": macro,
+        }
+        try:
+            self.signal_log.append(record)
+            self._last_logged_sec_per_slug[slug] = sec
+        except Exception as e:  # pragma: no cover
+            log.warning("signal_log_append_failed", err=str(e), strategy=self.id)
 
     def record_trade(self, trade: Trade) -> None:
         self.trade_log.append({

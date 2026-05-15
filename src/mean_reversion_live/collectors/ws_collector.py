@@ -120,7 +120,12 @@ class WsCollector:
         if new_set == self._desired_subs:
             return
         self._desired_subs = new_set
-        log.info("ws_subscriptions_updated", n=len(asset_ids))
+        # GC orderbooks for tokens we no longer subscribe to. Otherwise _books
+        # accumulates one entry per ever-seen token over 7+ days (~3,000 entries).
+        stale = [tok for tok in self._books if tok not in new_set]
+        for tok in stale:
+            del self._books[tok]
+        log.info("ws_subscriptions_updated", n=len(asset_ids), books_gc=len(stale))
         self._has_subs.set()
         # Force reconnect by closing the current WS (if any).
         self._reconnect_signal.set()

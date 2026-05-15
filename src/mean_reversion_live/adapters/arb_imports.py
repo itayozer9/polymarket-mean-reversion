@@ -17,7 +17,18 @@ from mean_reversion_live.config import get_settings
 def _inject_polymarket_arb_path() -> None:
     arb = Path(get_settings().polymarket_arb_path).resolve()
     if not arb.exists():
-        raise RuntimeError(f"polymarket-arb path not found: {arb}")
+        raise RuntimeError(
+            f"polymarket-arb path not found: {arb}\n"
+            f"Expected POLYMARKET_ARB_PATH (or .env polymarket_arb_path) to point at "
+            f"the polymarket-arb checkout."
+        )
+    signals_py = arb / "scripts" / "mean_reversion" / "signals.py"
+    if not signals_py.exists():
+        raise RuntimeError(
+            f"polymarket-arb path exists ({arb}) but is missing the expected "
+            f"signals.py at {signals_py}. Check that this is the polymarket-arb "
+            f"repo root and that scripts/mean_reversion/ hasn't been moved."
+        )
     if str(arb) not in sys.path:
         sys.path.insert(0, str(arb))
 
