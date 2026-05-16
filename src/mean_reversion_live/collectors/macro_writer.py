@@ -35,11 +35,15 @@ class MacroCsvGzAppender:
         self._base.mkdir(parents=True, exist_ok=True)
         self._files: Dict[str, gzip.GzipFile] = {}  # date_str -> open file
         self._rows_since_fsync: Dict[str, int] = {}
-        # Fixed schema: ts_ms first, then n_symbols_dipping_*, then per-symbol pairs.
+        # Fixed schema: ts_ms first, then n_symbols_dipping_*, then per-symbol
+        # block (yes_mid, drop, realized-vol horizons). Keep in sync with the
+        # fields emitted by MarketContext.snapshot.
         cols = ["ts_ms", "n_symbols_dipping_5pct_60s"]
         for sym in symbols:
             cols.append(f"{sym}_yes_mid")
             cols.append(f"{sym}_drop_60s_pct")
+            cols.append(f"{sym}_rv_60s_pct")
+            cols.append(f"{sym}_rv_300s_pct")
         self._columns: list = cols
         self._fsync_every = fsync_every_n_rows
         self._lock = threading.Lock()

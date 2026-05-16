@@ -95,6 +95,7 @@ class PaperEngine:
                 yes_mid=float(row.get("yes_mid") or 0.0),
                 no_mid=float(row.get("no_mid") or 0.0),
                 ts_ms=int(row.get("timestamp_ms") or 0),
+                spot_price=float(row.get("coinbase_price") or 0.0),
             )
         outcome = None  # outcomes are resolved by the collector via outcomes.csv; we don't pass it through here
         for s in self.strategies:

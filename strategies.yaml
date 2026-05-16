@@ -174,47 +174,6 @@
 # rule-based. Reviewed at end of week 1.
 # ────────────────────────────────────────────────────────────────────────────
 
-- id: cfg_manual_mirror
-  name: "Manual-mirror — wider band, 7-min-left, slower reaction"
-  enabled: true
-  starting_capital_usd: 1000.0
-  timeframe: "15m"
-  sim_config:
-    entry:
-      side: "BOTH"
-      entry_price_min: 0.10
-      entry_price_max: 0.30
-      drop_magnitude_pct: 15.0
-      drop_window_sec: 30
-      min_time_left_sec: 420
-      proximity_max_pct: 0.5
-      min_seconds_into_window: 30
-    exit:
-      profit_target_pct: 75.0
-      stop_loss_pct: 60
-      max_hold_sec: 240
-      trailing_stop_pct: null
-    filter:
-      min_book_depth_usd: 0.0
-      max_spread: 0.10
-      book_imbalance_min: null
-      vol_regime: "ALL"
-      time_of_day: "ALL"
-      multi_tier_entry: 1
-      correlated_signal_filter: false
-    human:
-      reaction_delay_min_sec: 0.5
-      reaction_delay_max_sec: 2.0
-      signal_skip_prob: 0.15
-      daily_trade_cap: null
-      post_loss_cooldown_sec: 60
-      concurrent_position_cap: 1
-      fixed_bet_usd: 10.0
-    fill:
-      fee_rate: 0.072
-      reject_prob: 0.03
-      use_next_tick_for_fill: true
-
 - id: cfg_velocity_v1
   name: "Velocity v1 — fast drops only (drop_window_sec=15)"
   enabled: true
@@ -256,82 +215,253 @@
       reject_prob: 0.03
       use_next_tick_for_fill: true
 
-- id: cfg_imbalance_v1
-  name: "Imbalance v1 — require buy-side book pressure"
-  enabled: true
-  starting_capital_usd: 1000.0
-  timeframe: "15m"
-  sim_config:
-    entry:
-      side: "DOWN"
-      entry_price_min: 0.075
-      entry_price_max: 0.125
-      drop_magnitude_pct: 15.0
-      drop_window_sec: 30
-      min_time_left_sec: 180
-      proximity_max_pct: 0.5
-      min_seconds_into_window: 15
-    exit:
-      profit_target_pct: 50.0
-      stop_loss_pct: 80
-      max_hold_sec: 180
-      trailing_stop_pct: null
-    filter:
-      min_book_depth_usd: 0.0
-      max_spread: 0.10
-      book_imbalance_min: 2.0
-      vol_regime: "ALL"
-      time_of_day: "ALL"
-      multi_tier_entry: 1
-      correlated_signal_filter: false
-    human:
-      reaction_delay_min_sec: 0.0
-      reaction_delay_max_sec: 1.5
-      signal_skip_prob: 0.10
-      daily_trade_cap: 25
-      post_loss_cooldown_sec: 60
-      concurrent_position_cap: 1
-      fixed_bet_usd: 10.0
-    fill:
-      fee_rate: 0.072
-      reject_prob: 0.03
-      use_next_tick_for_fill: true
+# ────────────────────────────────────────────────────────────────────────────
+# Backtest-tuned strategies (sweep on 5d of 15m data, Mar 15-17 + May 15-16).
+# Each was a top-K finisher in scripts/backtest_sweep.py refinement pass.
+# Started fresh 2026-05-16 — 1-week performance review scheduled by user.
+# See data/analysis/BACKTEST_SUMMARY_2026-05-16.md for the full story.
+# ────────────────────────────────────────────────────────────────────────────
 
-- id: cfg_wide_band_v1
-  name: "Wide band v1 — volume generator, lower drop threshold"
+- id: cfg_max_pnl_v1
+  name: "Max PnL v1 — H1R 7248f0feace5 (92.6% WR, +$4962 backtest)"
   enabled: true
   starting_capital_usd: 1000.0
   timeframe: "15m"
   sim_config:
     entry:
       side: "BOTH"
-      entry_price_min: 0.05
-      entry_price_max: 0.35
-      drop_magnitude_pct: 12.0
-      drop_window_sec: 30
-      min_time_left_sec: 180
-      proximity_max_pct: 1.0
-      min_seconds_into_window: 15
+      entry_price_min: 0.20
+      entry_price_max: 0.45
+      drop_magnitude_pct: 5.0
+      drop_window_sec: 90
+      min_time_left_sec: 300
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 60
     exit:
-      profit_target_pct: 40.0
-      stop_loss_pct: 50
-      max_hold_sec: 300
+      profit_target_pct: 15.0
+      stop_loss_pct: null
+      max_hold_sec: 900
       trailing_stop_pct: null
     filter:
-      min_book_depth_usd: 0.0
-      max_spread: 0.15
+      min_book_depth_usd: 20.0
+      max_spread: 0.05
       book_imbalance_min: null
       vol_regime: "ALL"
       time_of_day: "ALL"
       multi_tier_entry: 1
       correlated_signal_filter: false
     human:
-      reaction_delay_min_sec: 0.0
-      reaction_delay_max_sec: 1.0
+      reaction_delay_min_sec: 0.5
+      reaction_delay_max_sec: 2.0
       signal_skip_prob: 0.10
       daily_trade_cap: null
-      post_loss_cooldown_sec: 30
-      concurrent_position_cap: 1
+      post_loss_cooldown_sec: 0
+      concurrent_position_cap: 4
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: cfg_max_pnl_v2
+  name: "Max PnL v2 — H1R 86fab33400af (90.9% WR, +$4945, target 25%)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.20
+      entry_price_max: 0.40
+      drop_magnitude_pct: 5.0
+      drop_window_sec: 90
+      min_time_left_sec: 300
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 60
+    exit:
+      profit_target_pct: 25.0
+      stop_loss_pct: null
+      max_hold_sec: 900
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 20.0
+      max_spread: 0.05
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.5
+      reaction_delay_max_sec: 2.0
+      signal_skip_prob: 0.10
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 0
+      concurrent_position_cap: 4
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: cfg_max_pnl_v3
+  name: "Max PnL v3 — H1R 04cc0e596f47 (92.3% WR, +$4754, widest band 0.50)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.20
+      entry_price_max: 0.50
+      drop_magnitude_pct: 5.0
+      drop_window_sec: 90
+      min_time_left_sec: 300
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 60
+    exit:
+      profit_target_pct: 15.0
+      stop_loss_pct: null
+      max_hold_sec: 900
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 20.0
+      max_spread: 0.05
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.5
+      reaction_delay_max_sec: 2.0
+      signal_skip_prob: 0.10
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 0
+      concurrent_position_cap: 4
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: cfg_balanced_v1
+  name: "Balanced v1 — HYB d2d33b9f959b (94.1% WR, +$2201, tight spread filter)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.25
+      entry_price_max: 0.45
+      drop_magnitude_pct: 8.0
+      drop_window_sec: 90
+      min_time_left_sec: 300
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 60
+    exit:
+      profit_target_pct: 20.0
+      stop_loss_pct: null
+      max_hold_sec: 900
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 20.0
+      max_spread: 0.005
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.5
+      reaction_delay_max_sec: 2.0
+      signal_skip_prob: 0.10
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 0
+      concurrent_position_cap: 4
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: cfg_high_vol_wr
+  name: "High-vol WR — HYB 65b2db4037c1 (98.5% WR, +$901, vol=HIGH only)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.25
+      entry_price_max: 0.45
+      drop_magnitude_pct: 8.0
+      drop_window_sec: 90
+      min_time_left_sec: 300
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 60
+    exit:
+      profit_target_pct: 20.0
+      stop_loss_pct: null
+      max_hold_sec: 900
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 20.0
+      max_spread: 0.005
+      book_imbalance_min: null
+      vol_regime: "HIGH"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.5
+      reaction_delay_max_sec: 2.0
+      signal_skip_prob: 0.10
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 0
+      concurrent_position_cap: 4
+      fixed_bet_usd: 10.0
+    fill:
+      fee_rate: 0.072
+      reject_prob: 0.03
+      use_next_tick_for_fill: true
+
+- id: cfg_late_panic_v1
+  name: "Late-window panic — H7R 68333cac7a68 (77.2% WR, +$2279, last 5min only)"
+  enabled: true
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  sim_config:
+    entry:
+      side: "BOTH"
+      entry_price_min: 0.10
+      entry_price_max: 0.20
+      drop_magnitude_pct: 20.0
+      drop_window_sec: 60
+      min_time_left_sec: 60
+      proximity_max_pct: 100.0
+      min_seconds_into_window: 600
+    exit:
+      profit_target_pct: 45.0
+      stop_loss_pct: null
+      max_hold_sec: 240
+      trailing_stop_pct: null
+    filter:
+      min_book_depth_usd: 20.0
+      max_spread: 0.05
+      book_imbalance_min: null
+      vol_regime: "ALL"
+      time_of_day: "ALL"
+      multi_tier_entry: 1
+      correlated_signal_filter: false
+    human:
+      reaction_delay_min_sec: 0.5
+      reaction_delay_max_sec: 2.0
+      signal_skip_prob: 0.10
+      daily_trade_cap: null
+      post_loss_cooldown_sec: 0
+      concurrent_position_cap: 4
       fixed_bet_usd: 10.0
     fill:
       fee_rate: 0.072

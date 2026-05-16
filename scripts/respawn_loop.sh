@@ -62,9 +62,11 @@ while (( respawn_count < MAX_RESPAWNS )); do
 
     log_event "respawn_loop_spawn n=$respawn_count"
 
-    # Run inner process in foreground of this script. Stdout/stderr → console log.
-    # Use exec via subshell so we have a PID to forward signals to.
-    uv run python -m mean_reversion_live.scripts.run_combined >> "$LOGFILE" 2>&1 &
+    # Invoke the venv Python directly so CHILD_PID is the actual Python process.
+    # Previously we used `uv run python ...`, but uv-run can sit between us and
+    # Python and not always forward SIGTERM cleanly — that left grandchild
+    # Python processes orphaned after stop_all.sh, producing duplicate bots.
+    .venv/bin/python -m mean_reversion_live.scripts.run_combined >> "$LOGFILE" 2>&1 &
     CHILD_PID=$!
     log_event "respawn_loop_child_started pid=$CHILD_PID"
 
