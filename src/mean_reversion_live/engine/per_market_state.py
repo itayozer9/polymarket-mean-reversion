@@ -314,13 +314,28 @@ class PerMarketState:
             return None
         depth_usd = _side_ask_depth(tick, side)
         bet = self.cfg.human.fixed_bet_usd
-        fillable_usd = min(bet, depth_usd)
-        if fillable_usd < 1.0:
-            return None
-        shares = fillable_usd / ask
+        if self.cfg.fill.realistic_fill_model:
+            # Walk-the-book: over-depth portion fills 2¢ worse than best ask.
+            if depth_usd < 1.0:
+                return None
+            portion_at_best = min(1.0, depth_usd / bet) if bet > 0 else 1.0
+            portion_above = 1.0 - portion_at_best
+            worse_ask = min(1.0, ask + 0.02)
+            effective_ask = portion_at_best * ask + portion_above * worse_ask
+            if effective_ask <= 0:
+                return None
+            shares = bet / effective_ask
+            fillable_usd = bet
+            entry_price = effective_ask
+        else:
+            fillable_usd = min(bet, depth_usd)
+            if fillable_usd < 1.0:
+                return None
+            shares = fillable_usd / ask
+            entry_price = ask
         return Position(
             side=side,
-            entry_price=ask,
+            entry_price=entry_price,
             entry_tick_idx=-1,
             entry_ts_ms=tick.timestamp_ms,
             shares=shares,
@@ -352,6 +367,18 @@ class PerMarketState:
             if bid <= 0:
                 mid = _side_mid(tick, pos.side)
                 exit_price = max(0.0, mid)
+            elif self.cfg.fill.realistic_fill_model:
+                bid_depth_usd = (
+                    tick.yes_bid_depth if pos.side == "UP" else tick.no_bid_depth
+                )
+                target_usd = pos.shares * bid
+                if target_usd > 0:
+                    portion_at_best = min(1.0, bid_depth_usd / target_usd)
+                else:
+                    portion_at_best = 1.0
+                portion_above = 1.0 - portion_at_best
+                worse_bid = max(0.0, bid - 0.02)
+                exit_price = portion_at_best * bid + portion_above * worse_bid
             else:
                 exit_price = bid
             fee_exit = calc_fee(pos.shares, exit_price, self.cfg.fill.fee_rate)

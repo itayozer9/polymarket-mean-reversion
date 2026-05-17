@@ -1,5 +1,6 @@
 """Per-strategy state: SimConfig, Portfolio, file paths, PerMarketState cache."""
 from __future__ import annotations
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -62,6 +63,58 @@ class StrategyHandle:
         self.portfolio = Portfolio(human=self.cfg.human, bankroll=self.starting_capital_usd)
         self.rng = np.random.default_rng(int(self.cfg.hash_id(), 16) % (2 ** 32))
         self._setup_io()
+        self._replay_existing_trades()
+
+    def _replay_existing_trades(self) -> None:
+        """Rebuild portfolio aggregates from trades.jsonl on startup.
+
+        Restart-safe persistence: the engine appends every closed trade to
+        data/jsonl/<sid>/trades.jsonl. On startup we replay those rows so
+        n_trades, win_rate, total_pnl, total_fees, today's count, and any
+        post-loss cooldown are carried forward across stop/start cycles.
+        """
+        trades_path = self.data_dir / "jsonl" / self.id / "trades.jsonl"
+        if not trades_path.exists():
+            return
+        n = 0
+        try:
+            with open(trades_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rec = json.loads(line)
+                    trade = Trade(
+                        slug=rec["slug"],
+                        side=rec["side"],
+                        entry_ts_ms=int(rec["entry_ts_ms"]),
+                        exit_ts_ms=int(rec["exit_ts_ms"]),
+                        entry_price=float(rec["entry_price"]),
+                        exit_price=float(rec["exit_price"]),
+                        shares=float(rec["shares"]),
+                        bet_usd=float(rec["bet_usd"]),
+                        fee_total=float(rec["fee_total"]),
+                        pnl=float(rec["pnl"]),
+                        exit_reason=rec["exit_reason"],
+                        seconds_held=int(rec["seconds_held"]),
+                    )
+                    # on_entry → on_exit pair recreates portfolio aggregates
+                    # (trades_today bucketed by UTC date; open_positions nets to 0).
+                    self.portfolio.on_entry(trade.entry_ts_ms)
+                    self.portfolio.on_exit(trade)
+                    n += 1
+        except Exception as e:
+            log.warning("trade_replay_failed", strategy=self.id, err=str(e), n_replayed=n)
+            return
+        if n > 0:
+            log.info(
+                "trade_replay_completed",
+                strategy=self.id,
+                n_replayed=n,
+                total_pnl=round(self.portfolio.total_pnl, 4),
+                wins=self.portfolio.wins,
+                win_rate=round(self.portfolio.win_rate, 4),
+            )
 
     def _setup_io(self):
         sd = self.data_dir / "jsonl" / self.id

@@ -115,10 +115,11 @@ def run_market_with_reentry(
 # ---------------------------------------------------------------------------
 
 def _base_human() -> HumanParams:
+    # Matches strategies.yaml friction settings post-2026-05-16 tightening.
     return HumanParams(
         reaction_delay_min_sec=0.5,
-        reaction_delay_max_sec=2.0,
-        signal_skip_prob=0.10,
+        reaction_delay_max_sec=2.5,
+        signal_skip_prob=0.12,
         daily_trade_cap=None,
         post_loss_cooldown_sec=0,
         concurrent_position_cap=4,
@@ -126,7 +127,14 @@ def _base_human() -> HumanParams:
     )
 
 def _base_fill() -> FillParams:
-    return FillParams(fee_rate=0.072, reject_prob=0.03, use_next_tick_for_fill=True)
+    # Realistic fill model: walk-the-book on entry, bid-depth cap on exit.
+    # Matches strategies.yaml friction settings post-2026-05-16 tightening.
+    return FillParams(
+        fee_rate=0.07,
+        reject_prob=0.06,
+        use_next_tick_for_fill=True,
+        realistic_fill_model=True,
+    )
 
 
 def base_h1() -> SimConfig:
