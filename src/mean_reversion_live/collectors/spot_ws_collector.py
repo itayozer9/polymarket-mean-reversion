@@ -165,14 +165,29 @@ class CoinbaseSpotWsCollector:
         self._symbols = [s for s in symbols if s in _SYMBOL_TO_PRODUCT]
         self._products = [_SYMBOL_TO_PRODUCT[s] for s in self._symbols]
         self._min_interval = min_interval_sec
-        self._stop = asyncio.Event()
+        # The stop Event is created lazily inside run(), on whatever event loop
+        # actually drives this collector. Creating it in __init__ would bind it
+        # to the constructing thread's loop; this collector is hosted on its
+        # own thread/loop (see ThreadedCollectorRunner), so a __init__-time
+        # Event would raise "got Future attached to a different loop".
+        self._stop: Optional[asyncio.Event] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         # latest parsed row per symbol + last-write time, for the 1 Hz floor.
         self._latest: Dict[str, Dict[str, object]] = {}
         self._last_write_ms: Dict[str, int] = {}
         self._rows_written = 0
 
     def stop(self) -> None:
-        self._stop.set()
+        """Signal the collector to wind down. Safe to call from any thread —
+        the Event is set on its owning loop via call_soon_threadsafe."""
+        ev, loop = self._stop, self._loop
+        if ev is None or loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(ev.set)
+        except RuntimeError:
+            # Loop already closed.
+            pass
 
     async def run(self) -> None:
         """Supervise the WS-consume + floor-writer children.
@@ -185,6 +200,9 @@ class CoinbaseSpotWsCollector:
         if not self._products:
             log.warning("spot_ws_no_products")
             return
+        # Bind the stop Event to *this* loop.
+        self._stop = asyncio.Event()
+        self._loop = asyncio.get_running_loop()
         ws_task = asyncio.create_task(self._ws_consume())
         floor_task = asyncio.create_task(self._floor_writer())
         try:

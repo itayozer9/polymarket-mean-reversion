@@ -170,3 +170,44 @@ async def test_run_respawns_dead_child(tmp_path):
     # The crashing child must have been respawned multiple times — proof the
     # supervisor does not let one dead child kill the stream.
     assert floor_starts["n"] >= 2
+
+
+def test_collector_runs_on_separate_thread_loop():
+    """The collector is hosted on a ThreadedCollectorRunner in production. Its
+    stop Event must bind to the *thread's* loop, not the constructing thread's
+    — otherwise run() raises 'got Future attached to a different loop'.
+
+    This reproduces the production wiring: construct on the main thread, run on
+    a dedicated thread, then stop from the main thread."""
+    import time as _time
+
+    from mean_reversion_live.collectors.thread_runner import ThreadedCollectorRunner
+
+    w = SpotCsvGzAppender(Path("/tmp"), fsync_every_n_rows=10_000)
+    # Construct on the (main/test) thread — mirrors run_combined.amain().
+    c = CoinbaseSpotWsCollector(w, ["btc"])
+
+    floor_iters = {"n": 0}
+
+    async def fake_floor():
+        # Touches self._stop the way the real floor writer does.
+        while not c._stop.is_set():
+            floor_iters["n"] += 1
+            try:
+                await asyncio.wait_for(c._stop.wait(), timeout=0.02)
+            except asyncio.TimeoutError:
+                pass
+
+    async def fake_ws():
+        await c._stop.wait()
+
+    c._floor_writer = fake_floor
+    c._ws_consume = fake_ws
+
+    runner = ThreadedCollectorRunner("spot_test", c.run, on_stop=c.stop)
+    runner.start()
+    _time.sleep(0.3)
+    # If the Event were bound to the wrong loop, run() would have crashed and
+    # floor_iters would be 0.
+    assert floor_iters["n"] > 1
+    runner.stop(join_timeout=5.0)
