@@ -126,12 +126,16 @@ If any of these fails, every later number is fiction.
 
 1. **Outcome correctness.** Recompute each window's resolution from spot at close;
    cross-check `outcomes.csv`. Map tick/outcome coverage per coin per day.
-2. **Cost realism.** The sim already enters at the ask and exits at the bid, and
-   charges `fee = 0.07 × p × (1−p)` per share. Verify against Polymarket's real 2026
-   fee schedule whether that fee is correct (or zero), and quantify the true
-   round-trip cost — fee **plus** the bid/ask spread crossed — in the entry-relevant
-   odds band. The spread, not the fee, is the likely killer; this number is the
-   hurdle every strategy must clear.
+2. **Cost realism — taker vs maker.** Polymarket's verified 2026 fee
+   (docs.polymarket.com/trading/fees): `fee = shares × feeRate × p × (1−p)`,
+   crypto `feeRate = 0.07`, **takers pay, makers pay zero and earn a ~20%
+   rebate**. The simulator models a *taker* round trip — cross the spread on both
+   legs and pay the fee twice — which Phase 0 measures at **~16–21% of a $10
+   stake** (the hurdle a taker strategy must clear; it makes any sub-25% profit
+   target structurally impossible). But a *patient* strategy can execute as a
+   *maker* — post limit orders and wait — for ~0 spread, 0 fee, a small rebate.
+   **Maker vs taker is the single largest cost lever, worth ~16–21% per trade;
+   the research models and reports both.**
 3. **Sim vs reality.** Reconcile a sample of recorded paper trades against the raw
    tick book — was each fill price actually available at that moment?
 4. **Look-ahead leakage audit.** Read `features.py` / `signals.py` / `simulate.py`
@@ -280,7 +284,12 @@ No real trade records exist, so the user's policy becomes an explicit documented
   "Odds dropped but still a coin-flip → hold" vs "odds dropped and the market is now
   decided → exit" may be what keeps the high win rate *and* removes the
   account-denting day.
-- Cost-aware from line one, using Phase 0's corrected fill model.
+- **Execution mode is a first-class design choice.** A *taker* round trip costs
+  ~16–21% of stake (Phase 0); a *maker* round trip (post limit orders, wait for
+  fill) costs ~0 and earns a small rebate. A patient strategy should default to
+  maker execution where the fill-probability cost is acceptable; every strategy
+  is evaluated under both. This alone can decide viability.
+- Cost-aware from line one, using Phase 0's corrected, taker/maker-explicit cost model.
 - **Designed for daily consistency** — prefer higher-frequency, lower-variance
   edges and/or a portfolio of decorrelated strategies so the *daily* PnL
   distribution is tight and rarely negative, per the acceptance bar.
@@ -312,7 +321,11 @@ A strategy ships only if it clears **every** gate:
 - **Multiple-testing accounting.** Log every hypothesis; deflated Sharpe / explicit
   correction; report how many strategies would look this good by chance.
 - **Null / placebo tests.** Shuffled outcomes and random entry times must yield ≈$0.
-- **Cost stress.** ±50% on spread/fees/slippage and pessimistic fills.
+- **Cost stress.** Evaluate each strategy under both a **taker** cost model
+  (cross the spread + 0.07 fee on both legs) and a **maker** model (0 fee, small
+  rebate, but a fill-probability haircut — a posted limit order may not fill
+  before the move passes). ±50% sensitivity on spread, fee, and the maker
+  fill-rate assumption.
 - **Capacity check.** Using depth data — how many entries are actually fillable at
   $10, does the edge survive when restricted to fills with real resting size.
 
