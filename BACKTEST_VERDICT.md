@@ -1,3 +1,13 @@
+> # ⛔ INVALID — DO NOT CITE THIS DOCUMENT AS EVIDENCE OF AN EDGE
+>
+> **Superseded 2026-05-22 by `docs/research/FINAL_REPORT.md`.**
+> The headline 1000-config sweep below ran on **March 16–17 tick data whose
+> order book is corrupt** (recorded `bid > ask` in 83–88% of ticks). The
+> simulator bought at the ask and sold at the bid, pocketing ≈$2 of fake PnL per
+> $10 trade *before any signal* — that artifact produced the 88–93% "win rates".
+> The edge described here **does not exist.** See `docs/research/phase0_audit.md`
+> (Task 3b) and `docs/research/FINAL_REPORT.md`.
+
 # Mean-Reversion Backtest — Stage A + Validation Summary
 
 **Date:** 2026-05-15

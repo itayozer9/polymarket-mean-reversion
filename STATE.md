@@ -112,3 +112,38 @@ Shipped the changes from `~/.claude/plans/understand-our-goal-and-soft-kay.md` (
 - `data/jsonl/<sid>/signals.jsonl` for entry-funnel analysis (fired vs near-miss vs skipped — where is each strategy losing potential trades?)
 - `data/live_macro/<date>.csv.gz` for "does the edge weaken under macro stress?"
 - Compare the 4 shadow strategies' PnL/WR against the 2 validated configs.
+
+---
+
+## 2026-05-22 — Full edge-research engagement (branch `edge-research`)
+
+A from-scratch, physics-first investigation replacing the sweep-and-deploy
+approach. **Full write-up: `docs/research/FINAL_REPORT.md`.**
+
+**Outcome: no profitable strategy found — a genuine, honest negative.**
+
+What happened:
+- **Phase 0 audit found two data bugs.** (1) March 16–17 tick data has a corrupt
+  order book (`bid > ask` 83–88%) — the data the original `BACKTEST_VERDICT.md`
+  sweep ran on; that "edge" was a ≈$2/trade encoding artifact. `BACKTEST_VERDICT.md`
+  is now marked **invalid**. (2) The live bot's `discovery.py` recorded each
+  strike ~30 min too early, corrupting `move_pct`/`outcome` for all May data
+  (labels wrong on 31% of windows).
+- **The strike bug is FIXED** — `discovery.py` now captures the strike at
+  window-open; the bot was restarted. Correct labels were rebuilt from
+  Polymarket's API (real resolved outcomes, 100% coverage) and the canonical
+  dataset re-derived.
+- **L2 capture added** — the bot now also writes full-depth books to
+  `data/live_l2/` at 1 Hz.
+- **Phases 2–4 on corrected data:** the market is well-calibrated; odds continue
+  *down* after a drop (no bounce); the user's patient policy loses −$2.19/trade
+  honestly priced. **Market-making feasibility: no-go** (adverse selection >
+  spread). Three interim "edges" were all data artifacts, caught in research.
+- Root cause of viability: a 16–21% taker round-trip cost wall that no measured
+  edge clears.
+
+**Bot status:** running, with the strike fix + L2 capture. It may continue as a
+pure data collector; the `research/` pipeline is re-runnable on future data.
+
+**Open door:** the user's real manual trade records were never available — the
+one remaining way to test whether the manual edge was real. See FINAL_REPORT §4, §7.
