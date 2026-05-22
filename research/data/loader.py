@@ -19,6 +19,8 @@ HISTORICAL_DIR = os.path.join(REPO_ROOT, "data", "historical")
 LIVE_DIR = os.path.join(REPO_ROOT, "data", "live")
 OUTCOMES_FILE = os.path.join(REPO_ROOT, "data", "outcomes.csv")
 
+QUARANTINE_BEFORE = "2026-05-15"  # Task 3b: March tick data has a corrupt order book — unusable.
+
 ALL_TICK_COLS = [
     "timestamp_ms", "market_slug", "symbol", "window_start_ts", "window_end_ts",
     "seconds_into_window", "yes_best_bid", "yes_best_ask", "yes_bid_depth",
@@ -60,11 +62,18 @@ def _file_date(path: str) -> Optional[date]:
         return None
 
 
-def list_tick_files(symbol: str, date_start: str, date_end: str) -> list[str]:
+def list_tick_files(symbol: str, date_start: str, date_end: str,
+                    include_quarantined: bool = False) -> list[str]:
     """All tick files for symbol in [date_start, date_end], historical + live,
-    chronologically ordered. Skips *_raw.csv.gz duplicates."""
+    chronologically ordered. Skips *_raw.csv.gz duplicates.
+
+    By default, excludes files dated before QUARANTINE_BEFORE (Task 3b: March
+    tick data has a corrupt order book). Pass include_quarantined=True for audit
+    tasks that legitimately need to scan all data.
+    """
     d0 = datetime.strptime(date_start, "%Y-%m-%d").date()
     d1 = datetime.strptime(date_end, "%Y-%m-%d").date()
+    quarantine_cutoff = datetime.strptime(QUARANTINE_BEFORE, "%Y-%m-%d").date()
     found: dict[date, str] = {}
     for d in (HISTORICAL_DIR, LIVE_DIR):
         for p in glob.glob(os.path.join(d, f"{symbol}_*.csv.gz")):
@@ -72,15 +81,18 @@ def list_tick_files(symbol: str, date_start: str, date_end: str) -> list[str]:
                 continue
             fd = _file_date(p)
             if fd is not None and d0 <= fd <= d1:
+                if not include_quarantined and fd < quarantine_cutoff:
+                    continue
                 found[fd] = p  # live overrides historical if both exist
     return [found[k] for k in sorted(found)]
 
 
-def iter_windows(symbol: str, timeframe: str, date_start: str, date_end: str
-                 ) -> Iterator[tuple[str, pd.DataFrame]]:
+def iter_windows(symbol: str, timeframe: str, date_start: str, date_end: str,
+                 include_quarantined: bool = False) -> Iterator[tuple[str, pd.DataFrame]]:
     """Yield (slug, ticks_df) per market window, chronologically."""
     prefix = f"{symbol}-updown-{timeframe}-"
-    for f in list_tick_files(symbol, date_start, date_end):
+    for f in list_tick_files(symbol, date_start, date_end,
+                             include_quarantined=include_quarantined):
         df = load_tick_csv(f)
         df = df[df["market_slug"].astype(str).str.startswith(prefix)]
         for slug, g in df.groupby("market_slug", sort=True):
