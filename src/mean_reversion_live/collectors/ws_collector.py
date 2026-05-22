@@ -16,6 +16,7 @@ import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from mean_reversion_live.collectors.l2_writer import L2CsvGzAppender, book_to_l2_row
 from mean_reversion_live.collectors.spot_collector import SpotPriceCache
 from mean_reversion_live.collectors.tick_writer import CrashSafeCsvGzAppender
 from mean_reversion_live.config import get_settings
@@ -80,6 +81,23 @@ class OrderBook:
         ba_size = self.asks.get(ba, 0.0) if ba > 0 else 0.0
         return bb, ba, bb_size, ba_size
 
+    def top_levels(self, n: int) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
+        """Return ([ (bid_px, bid_sz), ... ], [ (ask_px, ask_sz), ... ]).
+
+        Bids sorted DESC by price (best first), asks sorted ASC by price
+        (best first). Each list has exactly `n` entries — short sides are
+        padded with (0.0, 0.0) so the CSV schema is fixed-width.
+        """
+        bid_prices = sorted(self.bids.keys(), reverse=True)[:n]
+        ask_prices = sorted(self.asks.keys())[:n]
+        bids = [(p, self.bids[p]) for p in bid_prices]
+        asks = [(p, self.asks[p]) for p in ask_prices]
+        while len(bids) < n:
+            bids.append((0.0, 0.0))
+        while len(asks) < n:
+            asks.append((0.0, 0.0))
+        return bids, asks
+
 
 class WsCollector:
     """Consume Polymarket CLOB WS + run a 1Hz aggregator."""
@@ -90,10 +108,12 @@ class WsCollector:
         spot_cache: SpotPriceCache,
         tick_writer: CrashSafeCsvGzAppender,
         out_queue: Optional[asyncio.Queue] = None,
+        l2_writer: Optional[L2CsvGzAppender] = None,
     ):
         self._discovery = discovery
         self._spot = spot_cache
         self._writer = tick_writer
+        self._l2_writer = l2_writer  # additive full-depth stream; None disables
         self._out_queue = out_queue  # bounded; paper engine reads here
         self._stop = asyncio.Event()
         self._books: Dict[str, OrderBook] = defaultdict(OrderBook)
@@ -297,6 +317,22 @@ class WsCollector:
                 "total_mid": round(total_mid, 6),
             }
             self._writer.append(row)
+            # Additive L2 snapshot — full-depth YES book, separate stream.
+            # Best-effort: never let an L2 write failure disrupt the tick/decision path.
+            if self._l2_writer is not None:
+                try:
+                    bids, asks = yes_book.top_levels(self._l2_writer.levels)
+                    l2_row = book_to_l2_row(
+                        timestamp_ms=ts_ms,
+                        market_slug=slug,
+                        symbol=m.symbol,
+                        seconds_into_window=second_ts - m.window_start_ts,
+                        bids=bids,
+                        asks=asks,
+                    )
+                    self._l2_writer.append(l2_row)
+                except Exception as e:
+                    log.warning("l2_write_failed", slug=slug, err=str(e))
             emitted += 1
             if self._out_queue is not None:
                 try:

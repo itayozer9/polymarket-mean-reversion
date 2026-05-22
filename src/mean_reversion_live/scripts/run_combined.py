@@ -16,6 +16,7 @@ import time
 
 import structlog
 
+from mean_reversion_live.collectors.l2_writer import L2CsvGzAppender
 from mean_reversion_live.collectors.macro_writer import MacroCsvGzAppender
 from mean_reversion_live.collectors.outcome_writer import OutcomeWriter
 from mean_reversion_live.collectors.spot_collector import SpotPriceCache, spot_loop
@@ -87,6 +88,9 @@ async def amain() -> None:
     tick_writer = CrashSafeCsvGzAppender(settings.live_data_path)
     outcome_writer = OutcomeWriter(settings.outcomes_path)
     macro_writer = MacroCsvGzAppender(settings.data_path / "live_macro", symbols=settings.symbol_list)
+    # Additive full-depth (L2) capture — separate stream, does not touch the
+    # 23-column tick schema or the decision path. Used for offline research.
+    l2_writer = L2CsvGzAppender(settings.data_path / "live_l2")
 
     # Shared queue
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -110,6 +114,7 @@ async def amain() -> None:
         spot_cache=spot_cache,
         tick_writer=tick_writer,
         out_queue=tick_queue,
+        l2_writer=l2_writer,
     )
 
     # Paper engine
@@ -238,6 +243,7 @@ async def amain() -> None:
             pass
     tick_writer.close()
     macro_writer.close()
+    l2_writer.close()
     log.info("combined_stopped")
 
 
