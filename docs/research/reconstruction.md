@@ -2,7 +2,26 @@
 
 > Phase 4 of the edge-discovery research. A faithful, transparent simulation of the user's *stated* manual strategy, run on the **corrected** dataset (real Polymarket outcomes), development split only (May 15-20 UTC). The sealed hold-out (May 21-22) was asserted untouched.
 
-## Phase 4 Verdict
+> ## RETRACTED — see Task 8d (`docs/research/phase4_forensics.md`)
+>
+> **The positive verdict below is WRONG. It is a data/reconstruction artifact.**
+> The `_held_mid` / `_held_bid` helpers in `research/analysis/patient_policy.py`
+> reconstruct the held side's price as `1 − cheap_*`, which is invalid on
+> decided-market books (`total_mid ≈ 0`, not 1). On those books the simulator
+> inverts a worthless *losing* side into a phantom ~1.0 — it both detects a
+> false +75% profit target and fills a phantom sale at ~1.0 against a book with
+> $0 of real depth. 158 of the 335 profit-target exits (47.2%) are this
+> artifact, contributing $4,017 of the $5,288 profit-target PnL; all 158 are
+> positions that actually lost at resolution.
+>
+> **Honestly re-priced** (genuine held-side bid, depth-aware, decided books
+> excluded), the policy earns **−$2.19/trade (90% CI [−$2.41, −$1.97]), −$3,275
+> total** — a clean negative that AGREES with Phase 2 (calibrated, no edge) and
+> Phase 3 (sell-the-bounce loses ~$2.20/trade). The maker column is contaminated
+> by the same bug. Everything below — verdict, baseline table, win-rate/EV
+> section, profit-target attribution — is withdrawn. See `phase4_forensics.md`.
+
+## Phase 4 Verdict ❌ RETRACTED — artifact, see notice above
 
 **The user's stated policy back-tests *positive* on the dev split — but the result is fragile path-trading, not a clean inefficiency edge, and it does not look like a 95%-win strategy once costs are honest.**
 

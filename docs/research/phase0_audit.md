@@ -1056,3 +1056,42 @@ non-negative by s≈45. There is no real dislocation to race for.
   that depended on `outcome_up`.
 - 5m windows are likely affected the same way (discovery uses the same `k=+2` probe);
   audit them before trusting any 5m result.
+
+## Task 8d — Phase 4 profit-target exit forensics
+
+Forensic audit of `docs/research/reconstruction.md`'s **positive** Phase 4
+verdict (patient policy: taker +$1.83/trade, +$2,746, all EV from 335
+profit-target exits averaging +$15.79), which contradicted Phase 2 and Phase 3.
+
+Probe: `research/audit/phase4_exit_forensics.py`. Full write-up:
+`docs/research/phase4_forensics.md`.
+
+**VERDICT — ARTIFACT. Tag: BUG.** The +$1.83/trade edge is not real. The
+`_held_mid` / `_held_bid` helpers in `research/analysis/patient_policy.py`
+reconstruct the held side's price from the cheap side via `1 − cheap_*`. Those
+complement identities are invalid on **decided-market books** (`total_mid ≈ 0`,
+not 1 — the ~6.6% of May ticks flagged in Task 3). On a decided book the
+reconstruction inverts a worthless *losing* side into a phantom ~1.0: the
+simulator both *detects* a +75% profit target (held mid → ~1.0) and *fills* the
+"sale" at a phantom ~1.0 bid against a book with $0 of real depth.
+
+- 158 of the 335 profit-target exits (47.2%) are into one-sided / decided-market
+  books with a real best bid of **0.000** and **$0** bid depth.
+- All 158 are positions whose held side ultimately **lost** at resolution (0/158
+  won) — they are the resolution event, mis-read as a mid-window sale.
+- Those 158 phantom fills contribute **$4,017 of the $5,288** profit-target PnL.
+- Re-priced honestly (genuine held-side bid, depth-aware, decided books excluded
+  → settle at the true outcome): the policy earns **−$2.19/trade (90%
+  window-clustered CI [−$2.41, −$1.97]), −$3,275 total** over the same 1,498 dev
+  trades. The sign flips; the result now **agrees** with Phase 2 (calibrated, no
+  edge) and Phase 3 (sell-the-bounce loses ~$2.20/trade).
+- No look-ahead — the exit scan is strictly-later-tick and fills at the
+  contemporaneous tick; the bug is a wrong *contemporaneous* price, not peeking.
+
+`reconstruction.md`'s Phase 4 verdict, baseline table, win-rate/EV section, and
+profit-target attribution are withdrawn — they rest on the artifact. The maker
+column is contaminated by the same `_held_mid` reconstruction. Fix for any future
+patient-policy work: price the held side from its own `{side}_best_bid` /
+`{side}_best_ask` in `ticks_15m.parquet`, never `1 − cheap_*`, and apply Phase 3's
+two-sided-book guard (`bid > 0.01`, `ask ∈ (0,1)`, `bid < ask`, `bid_depth > 0`)
+at both entry and exit.
