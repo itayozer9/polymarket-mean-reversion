@@ -15,5 +15,8 @@ runs/
 
 data/research/
 
+# Un-ignore the research package sub-dirs that share names with ignored dirs
+!research/data/
+
 # OS
 .DS_Store
