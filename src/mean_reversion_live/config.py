@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     gamma_base_url: str = "https://gamma-api.polymarket.com"
     clob_base_url: str = "https://clob.polymarket.com"
     clob_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    data_api_base_url: str = "https://data-api.polymarket.com"
 
     coinbase_base_url: str = "https://api.coinbase.com"
 
