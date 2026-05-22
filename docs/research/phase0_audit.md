@@ -692,7 +692,99 @@ not as guarantees that fills occur at quoted prices.
 | Walk-the-book measurability | NOT MEASURABLE from this data (top-of-book only) |
 
 ## Task 7 — Look-ahead / leakage audit
-_pending_
+
+Script: `research/audit/leakage.py`. Run via `uv run python -m research.audit.leakage`.
+Scope: `polymarket-arb/scripts/mean_reversion/{features,signals,simulate}.py`.
+Prior manual verdict (interim_code_audit.md finding #10): no look-ahead leakage.
+This task makes that verdict reproducible with runnable assertions.
+
+### Assertion A — reaction delay guarantees fill tick > signal tick
+
+**PASS.** Source inspection of `simulate.simulate_market` confirms:
+
+```python
+delay_ticks = max(1, int(np.ceil(delay_sec)))   # always >= 1
+armed_until_idx = i + delay_ticks                # signal_i + delay
+```
+
+In the ARMED branch, the fill only executes when `i >= armed_until_idx`, i.e.
+at tick index ≥ `signal_i + 1`. The fill price is drawn from a tick that arrives
+*after* the signal tick — exactly as in live trading. This is not look-ahead: the
+"future" tick is the immediately next observable price, not a later-in-window price.
+
+### Assertion B — `rolling_max_drop` is strictly causal
+
+**PASS.** Source inspection of `features.rolling_max_drop` confirms:
+
+```python
+lo = max(0, i - window_sec)
+window = price[lo:i + 1]   # indices lo..i only
+```
+
+The slice upper bound is `i + 1` (past-inclusive), never `i + 1:` (forward-start).
+No forward-start patterns (`i+1:`, `i + 1:`, `i+2:`, `i + 2:`) appear anywhere
+in the function. The function only reads price indices ≤ i — strictly causal.
+
+### Assertion B2 — `realized_vol_60s_from_move` is strictly causal
+
+**PASS.** Source inspection confirms:
+
+```python
+lo = max(0, i - 59)
+window = move[lo:i + 1]    # indices lo..i only
+```
+
+Same pattern as `rolling_max_drop`: past-inclusive, no forward-start slice. Causal.
+
+### Checklist — written verdict per item
+
+| # | Item | Verdict |
+|---|------|---------|
+| 1 | `exit_signal` uses only current tick's bid | CLEAN |
+| 2 | `forced_resolution` consults outcome only at window end | CLEAN |
+| 3 | `_precompute_features` uses no window-global stats | CLEAN |
+| 4 | `entry_signal` uses only pre-computed causal features | CLEAN |
+| 5 | `peak_mid` tracking is monotone-max of past bids only | CLEAN |
+
+**1. exit_signal uses only current tick's bid — CLEAN.**
+`signals.py::exit_signal` calls `_side_bid(tick, position.side)`, which reads
+`tick.yes_best_bid` or `tick.no_best_bid` — the *current* tick's bid. The
+`peak_mid` tracker is updated in `simulate_market`'s HOLDING loop with `bid_now`
+from the current tick only. No future tick is consulted.
+
+**2. forced_resolution consults outcome only at window end — CLEAN.**
+The forced-resolution trigger fires only when
+`tick.seconds_into_window >= window_duration_sec - 2` (≤ 2s before the natural
+end). The `outcome` tuple is passed in as a parameter (derived from outcomes.csv,
+not from future ticks) and affects only the *exit price*, not the entry decision.
+No tick-level look-ahead.
+
+**3. `_precompute_features` uses no window-global stats — CLEAN.**
+`simulate.py::_precompute_features` calls: `rolling_max_drop` (causal, assertion
+B), `book_imbalance` (elementwise ratio — no window context), `proximity_pct_from_move`
+(elementwise `|move_pct|/100` — no context), `realized_vol_60s_from_move` (causal,
+assertion B2). No function computes a full-window max/min/mean that would require
+knowing future ticks.
+
+**4. entry_signal uses only pre-computed causal features — CLEAN.**
+`signals.py::entry_signal` receives a `TickEvent` (current tick's values) and an
+`EntryFeatures` (pre-computed from causal arrays by `_entry_features_at`). It
+performs comparisons only — no array slicing, no future-tick indexing.
+
+**5. peak_mid tracking is monotone-max of past bids only — CLEAN.**
+`simulate_market` HOLDING loop: `if bid_now > position.peak_mid: position.peak_mid = bid_now`.
+Running maximum of bids seen so far, updated with the current tick. The trailing
+stop drawdown measures `peak_mid` vs current bid — both causal.
+
+### VERDICT
+
+**No look-ahead leakage found in the decision path.** All three automated
+assertions pass; all five checklist items are CLEAN. This reproduces and confirms
+the manual verdict in `docs/research/interim_code_audit.md` finding #10.
+
+**Implication:** The bot's paper losses are genuine strategy failure, not a
+backtest that cheated by peeking at future prices. The edge problem is real and
+must be solved with a real edge — not by fixing a leak (there is none).
 
 ## Task 8 — Sim vs live-paper reconciliation
 _pending_
