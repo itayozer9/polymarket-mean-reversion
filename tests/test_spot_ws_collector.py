@@ -10,17 +10,21 @@ This stream is separate from the REST spot poll that feeds the sacred
 23-column tick CSV's `coinbase_price` column.
 """
 from __future__ import annotations
+import asyncio
 import csv
 import gzip
 import io
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from mean_reversion_live.collectors.spot_ws_collector import (  # noqa: E402
     SPOT_COLUMNS,
+    CoinbaseSpotWsCollector,
     SpotCsvGzAppender,
     parse_ticker_msg,
 )
@@ -132,3 +136,37 @@ def test_spot_writer_splits_by_symbol_and_date(tmp_path):
     assert any(n.startswith("btc_2026-05-19") for n in names)
     assert any(n.startswith("btc_2026-05-20") for n in names)
     assert any(n.startswith("sol_2026-05-19") for n in names)
+
+
+# ----- supervisor restart behaviour -----------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_respawns_dead_child(tmp_path):
+    """If a child coroutine of CoinbaseSpotWsCollector.run() raises, run() must
+    restart it rather than letting the stream silently stop. We monkeypatch the
+    two children with a crashing floor writer that counts its starts."""
+    w = SpotCsvGzAppender(tmp_path, fsync_every_n_rows=1000)
+    c = CoinbaseSpotWsCollector(w, ["btc"])
+
+    floor_starts = {"n": 0}
+
+    async def crashing_floor():
+        floor_starts["n"] += 1
+        await asyncio.sleep(0.05)
+        raise RuntimeError("simulated floor-writer crash")
+
+    async def idle_ws():
+        # A well-behaved child that just waits for stop.
+        await c._stop.wait()
+
+    c._floor_writer = crashing_floor
+    c._ws_consume = idle_ws
+
+    run_task = asyncio.create_task(c.run())
+    await asyncio.sleep(0.4)  # long enough for several crash/respawn cycles
+    c.stop()
+    await asyncio.wait_for(run_task, timeout=2.0)
+
+    # The crashing child must have been respawned multiple times — proof the
+    # supervisor does not let one dead child kill the stream.
+    assert floor_starts["n"] >= 2

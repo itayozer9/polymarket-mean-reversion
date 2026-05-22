@@ -175,13 +175,37 @@ class CoinbaseSpotWsCollector:
         self._stop.set()
 
     async def run(self) -> None:
+        """Supervise the WS-consume + floor-writer children.
+
+        Either child dying must NOT silently kill the stream — under a busy /
+        starved event loop a child can raise (e.g. a WS close timeout). We
+        therefore restart any child that exits while we are not stopping, and
+        always retrieve its exception so it is never swallowed.
+        """
         if not self._products:
             log.warning("spot_ws_no_products")
             return
         ws_task = asyncio.create_task(self._ws_consume())
         floor_task = asyncio.create_task(self._floor_writer())
         try:
-            await self._stop.wait()
+            while not self._stop.is_set():
+                done, _ = await asyncio.wait(
+                    {ws_task, floor_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if self._stop.is_set():
+                    break
+                for t in done:
+                    # Retrieve the exception so it is never "never retrieved",
+                    # then respawn the child.
+                    exc = t.exception() if not t.cancelled() else None
+                    if t is ws_task:
+                        log.warning("spot_ws_consume_exited_respawn",
+                                    err=str(exc) if exc else None)
+                        ws_task = asyncio.create_task(self._ws_consume())
+                    elif t is floor_task:
+                        log.warning("spot_ws_floor_exited_respawn",
+                                    err=str(exc) if exc else None)
+                        floor_task = asyncio.create_task(self._floor_writer())
         finally:
             for t in (ws_task, floor_task):
                 t.cancel()
@@ -251,7 +275,11 @@ class CoinbaseSpotWsCollector:
 
     async def _floor_writer(self) -> None:
         """Guarantee at least one row per symbol per `min_interval`, even when
-        Coinbase sends no fresh ticker (quiet market)."""
+        Coinbase sends no fresh ticker (quiet market).
+
+        Every iteration body is guarded — a transient error must never kill the
+        floor writer, otherwise the stream silently stops at the first hiccup.
+        """
         ticks = 0
         while not self._stop.is_set():
             try:
@@ -260,11 +288,15 @@ class CoinbaseSpotWsCollector:
                 pass
             if self._stop.is_set():
                 break
-            now_ms = int(time.time() * 1000)
-            for symbol, row in list(self._latest.items()):
-                last = self._last_write_ms.get(symbol, 0)
-                if now_ms - last >= self._min_interval * 1000:
-                    self._write_row(symbol, row, now_ms)
+            try:
+                now_ms = int(time.time() * 1000)
+                for symbol, row in list(self._latest.items()):
+                    last = self._last_write_ms.get(symbol, 0)
+                    if now_ms - last >= self._min_interval * 1000:
+                        self._write_row(symbol, row, now_ms)
+            except Exception as e:
+                log.warning("spot_ws_floor_iteration_failed", err=str(e))
+                continue
             ticks += 1
             # Periodic liveness log so the stream is observably alive.
             if ticks <= 2 or ticks % 60 == 0:
