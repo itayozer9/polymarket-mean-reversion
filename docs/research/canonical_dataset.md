@@ -1,11 +1,44 @@
 # Canonical Research Dataset — Phase 1
 
 **Built:** 2026-05-22
+**Rebuilt (corrected):** 2026-05-22 — see correction notice below
 **Data scope:** 2026-05-15 .. 2026-05-22 (March quarantined — corrupt order book; see `phase0_verdict.md`)
 **Symbols:** btc, eth, sol, xrp
 **Timeframes:** 15m, 5m
 **Build script:** `research/build_dataset.py` (`uv run python -m research.build_dataset`)
+**Rebuild script (15m corrected):** `research/rebuild_dataset.py` (`uv run python -m research.rebuild_dataset`)
 **Output dir:** `data/research/` (gitignored — rebuild from source)
+
+---
+
+## Dataset correction notice — 2026-05-22 (Task 8c bug)
+
+`windows.parquet`, `ticks_15m.parquet`, and `entry_candidates_15m.parquet` were
+rebuilt on 2026-05-22 by `research/rebuild_dataset.py` to fix the **Task 8c
+discovery bug**: a race condition caused the bot to record each window's
+`start_price` (strike) from a Coinbase snapshot taken ~30 minutes *before* the
+window actually opened. This corrupted `start_price`, `move_pct`, `outcome`,
+`outcome_up`, `proximity_pct`, and `sigma_proximity` for all May 15m windows.
+The old `outcome_up` was wrong on **31% of windows** (692 / 2,228 checked).
+
+**Strike used in rebuilt files:** `true_strike` from `corrected_labels.parquet`
+— the Coinbase spot price at the genuine window-open tick (earliest
+`seconds_into_window`). The Chainlink `priceToBeat` (also available in
+`corrected_labels.parquet`) was not used for `move_pct` computation because
+all tick-level features are derived from the Coinbase feed; mixing feeds would
+introduce a systematic basis.
+
+**Outcome used in rebuilt files:** `authoritative_outcome_up` from
+`corrected_labels.parquet` — the real Polymarket-resolved outcome fetched from
+the gamma `/events` API for **100%** of the 2,232 May 15m windows. This is the
+actual settlement ground truth (Chainlink-based), not a reconstruction.
+
+**`ticks_5m.parquet`** was not modified (5m is a control, out of scope for this
+correction run). It still carries the corrupt `start_price` / `move_pct` from
+the original build.
+
+See `docs/research/corrected_labels.md` for the full audit and reconciliation
+methodology.
 
 ---
 
@@ -61,14 +94,21 @@ Average ~900 ticks per 15m window (out of 900 possible = 1 Hz), ~300 per 5m wind
 
 These are the no-skill baselines every Phase 2+ analysis must beat.
 
-| Symbol | P(Up) | n windows |
-|---|---|---|
-| btc | 0.494 | 557 |
-| eth | 0.481 | 557 |
-| sol | 0.474 | 557 |
-| xrp | 0.427 | 557 |
+**Updated 2026-05-22** — values below reflect the corrected labels (Task 8c
+rebuild). Old values (pre-correction) were wrong on ~31% of windows and should
+not be referenced.
 
-xrp has a notably bearish tilt (57% Down) over this period.
+| Symbol | P(Up) corrected | P(Up) old (corrupt) | n windows |
+|---|---|---|---|
+| btc | 0.4946 | 0.494 | 558 |
+| eth | 0.4875 | 0.481 | 558 |
+| sol | 0.4946 | 0.474 | 558 |
+| xrp | 0.4875 | 0.427 | 558 |
+| **Overall** | **0.4910** | 0.469 | **2,232** |
+
+After correction, all four symbols show a near-symmetric P(Up) ≈ 0.49, consistent
+with a fair binary market. The old xrp "bearish tilt" (57% Down) was an artefact
+of the corrupt strike — it does not represent a real market asymmetry.
 
 ---
 
