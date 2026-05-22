@@ -216,10 +216,13 @@ async def fetch_wallet_activity_positions(
 ) -> Dict[str, dict]:
     """Fetch + cache full activity history and open positions per wallet.
 
-    Returns a dict ``wallet -> {"activity": n, "positions": n, "skipped": bool}``
-    for the manifest. Wallets whose activity file already exists are skipped
+    Returns a dict ``wallet -> {"activity": n, "positions": n, "skipped": bool,
+    "truncated": bool}`` for the manifest; a failed wallet additionally carries
+    ``"error": str``. Wallets whose activity file already exists are skipped
     unless ``refresh`` is set. Activity is capped at ``MAX_ACTIVITY_RECORDS``
-    (the data-api's pagination ceiling — see that constant).
+    (the data-api's pagination ceiling — see that constant); ``truncated`` is
+    set when the wallet hit that cap. A failure on any single wallet is logged
+    and recorded as a zero-count stub so the rest of the run continues.
     """
     sem = asyncio.Semaphore(max(1, concurrency))
     counts: Dict[str, dict] = {}
@@ -229,33 +232,50 @@ async def fetch_wallet_activity_positions(
     async def _one(wallet: str) -> None:
         nonlocal done
         async with sem:
-            act_path = ACTIVITY_DIR / f"{wallet}.jsonl.gz"
-            pos_path = POSITIONS_DIR / f"{wallet}.json"
-            if act_path.exists() and pos_path.exists() and not refresh:
-                counts[wallet] = {
-                    "activity": _count_jsonl_gz(act_path),
-                    "positions": len(json.loads(pos_path.read_text())),
-                    "skipped": True,
-                }
-            else:
-                records = await fetch_activity(
-                    session, wallet, max_records=MAX_ACTIVITY_RECORDS
-                )
-                if len(records) >= MAX_ACTIVITY_RECORDS:
-                    log.warning(
-                        "activity.truncated_at_api_cap",
-                        wallet=wallet,
-                        records=len(records),
+            try:
+                act_path = ACTIVITY_DIR / f"{wallet}.jsonl.gz"
+                pos_path = POSITIONS_DIR / f"{wallet}.json"
+                if act_path.exists() and pos_path.exists() and not refresh:
+                    n_activity = _count_jsonl_gz(act_path)
+                    counts[wallet] = {
+                        "activity": n_activity,
+                        "positions": len(json.loads(pos_path.read_text())),
+                        "skipped": True,
+                        "truncated": n_activity >= MAX_ACTIVITY_RECORDS,
+                    }
+                else:
+                    records = await fetch_activity(
+                        session, wallet, max_records=MAX_ACTIVITY_RECORDS
                     )
-                _write_jsonl_gz(
-                    act_path, [dataclasses.asdict(r) for r in records]
+                    if len(records) >= MAX_ACTIVITY_RECORDS:
+                        log.warning(
+                            "activity.truncated_at_api_cap",
+                            wallet=wallet,
+                            records=len(records),
+                        )
+                    _write_jsonl_gz(
+                        act_path, [dataclasses.asdict(r) for r in records]
+                    )
+                    positions = await fetch_positions(session, wallet)
+                    _write_json(pos_path, positions)
+                    counts[wallet] = {
+                        "activity": len(records),
+                        "positions": len(positions),
+                        "skipped": False,
+                        "truncated": len(records) >= MAX_ACTIVITY_RECORDS,
+                    }
+            except Exception as e:  # noqa: BLE001 — isolate one wallet's failure
+                log.warning(
+                    "activity.wallet_failed",
+                    wallet=wallet,
+                    error=str(e),
                 )
-                positions = await fetch_positions(session, wallet)
-                _write_json(pos_path, positions)
                 counts[wallet] = {
-                    "activity": len(records),
-                    "positions": len(positions),
+                    "activity": 0,
+                    "positions": 0,
                     "skipped": False,
+                    "truncated": False,
+                    "error": str(e),
                 }
             done += 1
             if done % 10 == 0 or done == len(wallets):
@@ -266,7 +286,7 @@ async def fetch_wallet_activity_positions(
                     elapsed_s=round(time.monotonic() - started, 1),
                 )
 
-    await asyncio.gather(*[_one(w) for w in wallets])
+    await asyncio.gather(*[_one(w) for w in wallets], return_exceptions=True)
     return counts
 
 
@@ -327,9 +347,25 @@ async def decode_wallet_onchain(
             continue
         sampled = _sample_trade_txs(wallet, max_txs)
         started = time.monotonic()
-        roles = await decode_wallet_txs(
-            session, rpc_url, sampled, wallet, concurrency=concurrency
-        )
+        try:
+            roles = await decode_wallet_txs(
+                session, rpc_url, sampled, wallet, concurrency=concurrency
+            )
+        except Exception as e:  # noqa: BLE001 — isolate one wallet's failure
+            log.warning(
+                "onchain.wallet_failed",
+                wallet=wallet,
+                i=i,
+                total=len(wallets),
+                error=str(e),
+            )
+            counts[wallet] = {
+                "onchain": 0,
+                "sampled_txs": len(sampled),
+                "skipped": False,
+                "error": str(e),
+            }
+            continue
         _write_jsonl_gz(
             onchain_path, [dataclasses.asdict(r) for r in roles]
         )
@@ -412,13 +448,21 @@ async def run(args: argparse.Namespace) -> None:
     for w in wallets:
         ac = activity_counts.get(w, {})
         oc = onchain_counts.get(w, {})
-        per_wallet[w] = {
+        entry = {
             "boards": appearances.get(w, []),
             "activity_records": ac.get("activity", 0),
             "positions": ac.get("positions", 0),
+            "truncated": ac.get("truncated", False),
             "onchain_roles": oc.get("onchain", 0),
             "onchain_sampled_txs": oc.get("sampled_txs", 0),
         }
+        # Surface a fetch failure so Phase 2 can tell "fetch failed" apart
+        # from "genuinely zero activity". Prefer the activity-stage error;
+        # fall back to the on-chain-stage error.
+        err = ac.get("error") or oc.get("error")
+        if err:
+            entry["error"] = err
+        per_wallet[w] = entry
     manifest = {
         "fetch_timestamp": fetch_started.isoformat(),
         "fetch_date": fetch_date,
