@@ -648,36 +648,44 @@ def _verdict(curve_mid, curve_ask, bias_rows, slice_curves, fixed,
     lines.append("### VERDICT")
     lines.append("")
     lines.append(
-        f"Task 6 reported a tick-pooled cheap-side apparent gap of "
-        f"**+{TASK6_20BIN_HEADLINE_GAP_C:.2f}c** (mean over thick bins, 20-bin "
-        f"grid). Re-running that tick-pooled method on the 15-bin grid used "
-        f"here gives {mean_tp:+.2f}c. De-biasing to one observation per "
-        f"(window, time-slice):"
+        "**RE-RUN ON CORRECTED DATA (real Polymarket outcomes) -- supersedes "
+        "the earlier corrupt-label results.** The strike bug "
+        "(`phase0_audit.md` Task 8c; old labels wrong on ~31% of windows) is "
+        "fixed. The earlier corrupt-label calibration that reported a large "
+        "positive cheap-side gap is invalid; the numbers below are the "
+        "corrected-data re-derivation."
+    )
+    lines.append("")
+    lines.append(
+        f"De-biasing to one observation per (window, time-slice), on "
+        f"corrected outcomes:"
     )
     lines.append("")
     lines.append(
         f"- **De-biased pooled cheap_mid gap = {db_gap:+.2f}c** "
-        f"(mean over thick bins); cheap_ask (taker entry) = {ask_gap:+.2f}c."
+        f"(mean over thick bins); cheap_ask (taker entry) = {ask_gap:+.2f}c. "
+        + ("The cheap side is essentially calibrated -- there is no positive "
+           "calibration edge on real labels."
+           if db_gap <= 1.0 else
+           "")
     )
     n_matched = len(arts)
     pct = (100 * mean_artifact / mean_tp) if mean_tp else float("nan")
     lines.append(
         f"- Bin-for-bin over the {n_matched} matched thick bins (identical "
         f"15-bin grid): tick-pooled mean gap = {mean_tp:+.2f}c, de-biased mean "
-        f"gap = {mean_db:+.2f}c, so **~{mean_artifact:+.2f}c of the apparent "
-        f"edge was the tick-weighting artifact** "
-        f"(~{pct:.0f}% of the tick-pooled gap). The remaining "
-        f"**{mean_db:+.2f}c survives** de-biasing."
+        f"gap = {mean_db:+.2f}c (artifact {mean_artifact:+.2f}c). On corrected "
+        f"data both the tick-pooled and de-biased gaps are near zero -- there "
+        f"is no longer a large apparent edge for the de-biasing to shrink."
     )
     lines.append(
         f"- Low-price bins (cheap_mid<0.30) with the de-biased realized-rate "
-        f"CI still entirely above the diagonal: **{len(survivors)}**."
+        f"CI entirely ABOVE the diagonal (i.e. a positive, CI-separated "
+        f"mispricing): **{len(survivors)}**."
     )
     lines.append(
-        f"- Time-slice concentration of the POOLED low-bin gap: "
-        f"early (t<=240s) = {early_gap:+.2f}c; late (t>=480s) = "
-        f"{late_gap:+.2f}c. **But this is mostly a price-MIX effect** -- see "
-        f"below."
+        f"- Pooled low-bin gap by time-slice: early (t<=240s) = "
+        f"{early_gap:+.2f}c; late (t>=480s) = {late_gap:+.2f}c."
     )
     lines.append("")
 
@@ -699,12 +707,8 @@ def _verdict(curve_mid, curve_ask, bias_rows, slice_curves, fixed,
                 "trend_c": slope, "rho": rho, "n_slices": len(valid),
             }
     lines.append(
-        "**Disentangling the late-window concentration (price-mix vs time).** "
-        "The pooled per-slice gap grows from ~+4.5c (t=60s) to ~+15.9c "
-        "(t=720s). That looks like the suspicious late-window pattern -- but "
-        "late slices also contain far more genuinely-cheap observations "
-        "(frac with cheap_mid<0.20 rises 1% -> 69% from t=60 to t=720). "
-        "Holding the price band fixed isolates the true time effect "
+        "**Fixed-price-band x time-slice (price-mix control).** Holding the "
+        "price band fixed isolates any genuine time effect from the price-mix "
         "(`trend` = linear gap change across the ~11-min span the slices "
         "cover; `rho` = correlation of gap with t):"
     )
@@ -717,91 +721,67 @@ def _verdict(curve_mid, curve_ask, bias_rows, slice_curves, fixed,
             f"(rho={st['rho']:+.2f}) over {st['n_slices']} slices."
         )
     lines.append("")
-    wide = band_stats.get("[0.20,0.35)")
-    narrow = band_stats.get("[0.10,0.20)")
-    if wide is not None and abs(wide["trend_c"]) < 5.0 and abs(wide["rho"]) < 0.6:
-        mix_finding = (
-            "In the well-populated [0.20,0.35) band the gap shows NO monotone "
-            "time trend (it sits ~+12c at every slice; the only low value is "
-            "one noisy slice). So the pooled 'edge grows late' pattern is "
-            "**mostly a price-mix artifact, not a genuine late-window "
-            "effect** -- late slices simply contain more cheap observations. "
-            "The underlying mispricing within a fixed price is roughly "
-            "stable over the window. This is reassuring."
-        )
-    else:
-        mix_finding = (
-            "Even within a fixed price band the gap shows a material monotone "
-            "trend across slices -- there is a genuine time component on top "
-            "of the price-mix effect; treat the late-window region with "
-            "caution."
-        )
-    lines.append(mix_finding)
-    if narrow is not None:
-        lines.append("")
-        lines.append(
-            f"The narrower [0.10,0.20) band DOES trend up "
-            f"({narrow['trend_c']:+.1f}c, rho={narrow['rho']:+.2f}) -- but that "
-            f"band is confounded: a side this cheap early in a window is rare "
-            f"(n=16 at t=60s) and the *decided fraction within the band rises "
-            f"with t* (frac sigma>2 climbs 0% -> 55% from t=60 to t=720). "
-            f"Decided observations drag realized DOWN, so the rising gap there "
-            f"is a genuine mispricing widening, not contamination. Net: the "
-            f"cheap-tail edge is real; its apparent late-window growth in the "
-            f"pooled view is mostly price-mix."
-        )
+    lines.append(
+        "On corrected data the within-band gaps are small and hover near or "
+        "below zero at every slice -- there is no fixed-price under-pricing "
+        "to disentangle from the price-mix."
+    )
     lines.append("")
 
     # --- Contamination read ---
     corr = contam["corr"]
     lines.append(
         f"**Decided-market contamination.** corr(cheap_mid, sigma_proximity) "
-        f"= {corr:+.3f} -- weak. Cheaper observations ARE somewhat more "
-        f"decided (cheap_mid<0.10 band: 52% have sigma_proximity>2 vs 31% in "
-        f"the 0.35-0.55 band), and within the fixed [0.10,0.20) band the "
-        f"decided fraction rises with t. Crucially this works AGAINST the "
-        f"edge, not for it: decided cheap observations resolve to 0 and pull "
-        f"the realized rate DOWN. The de-biased gap is positive *despite* "
-        f"that drag, so the surviving edge is not a contamination artifact."
+        f"= {corr:+.3f} -- weak-to-moderate. Cheaper observations ARE somewhat "
+        f"more decided. Since the de-biased gap is ~0 / slightly negative, "
+        f"there is no positive edge here for contamination to either explain "
+        f"away or threaten."
     )
     lines.append("")
 
     # Honest tag.
-    if np.isnan(db_gap) or len(survivors) == 0:
-        tag = "NO EDGE -- the apparent calibration edge is a measurement artifact."
-    elif db_gap <= 0.0:
-        tag = "NO EDGE -- de-biased gap is non-positive."
+    if np.isnan(db_gap):
+        tag = "NO EDGE -- calibration gap is undefined."
+    elif db_gap <= 1.0:
+        surv_note = (
+            f"Only the single extreme-cheap-tail bin (cheap_mid<0.07, a side "
+            f"priced ~3c) has a CI-separated positive de-biased gap "
+            f"(~+7c) -- a residual longshot effect, far too small a slice of "
+            f"the curve and below taker cost; every other bin is flat or "
+            f"slightly negative."
+            if len(survivors) >= 1 else
+            "No low-price bin has a CI-separated positive mispricing.")
+        tag = ("NO TRADEABLE EDGE -- on corrected (real Polymarket) outcomes "
+               "the cheap side is essentially calibrated. The de-biased "
+               f"pooled gap is {db_gap:+.2f}c (cheap_ask {ask_gap:+.2f}c). "
+               + surv_note +
+               " The large positive cheap-side calibration gap seen on the "
+               "earlier corrupt labels was an artifact of the strike bug.")
     elif survives_taker:
         tag = ("EDGE SURVIVES de-biasing AND clears taker cost -- de-biased "
                "gap exceeds the ~21% taker round-trip cost.")
     elif survives_maker:
-        tag = ("EDGE SURVIVES de-biasing but does NOT clear taker cost "
-               "as a flat unconditional rule -- the +12.5c pooled gap is "
-               "below the ~16-21% taker round-trip cost. The lowest bins "
-               "(cheap_mid<0.20, de-biased gap +17-24c) DO clear taker cost; "
-               "a conditioned cheap-only rule may be tradeable as a taker, "
-               "and the whole curve is tradeable as a maker (~0 cost) modulo "
-               "the un-modelled fill-probability haircut.")
+        tag = ("Small positive de-biased gap that does NOT clear the "
+               "~16-21% taker round-trip cost; treat as not tradeable as a "
+               "flat rule.")
     else:
         tag = "NO EDGE -- de-biased gap is non-positive."
 
     lines.append(f"**TAG: {tag}**")
     lines.append("")
     lines.append(
-        f"**Bottom line.** The tick-weighting / lingering bias was REAL but "
-        f"SMALL: it inflated the apparent edge by only ~+1.5c on average "
-        f"(~11% of the tick-pooled gap), not the large inflation that was "
-        f"suspected. A genuine cheap-side calibration edge of "
-        f"**~+{db_gap:.1f}c (pooled, de-biased)** survives -- monotone in "
-        f"price, +17-24c in the cheapest bins (cheap_mid<0.20), shrinking to "
-        f"~+2-6c near 0.5. The per-slice 'edge grows late' pattern is mostly "
-        f"a price-mix artifact: within a fixed price band the gap is roughly "
-        f"flat over the window. As a flat unconditional rule the +12.5c gap "
-        f"does NOT clear the 16-21% taker cost; the cheap tail (mid<0.20) "
-        f"does, and Task 7's conditioned edge map plus Task 9's net-of-cost "
-        f"calibration should test whether a cheap-only taker rule is "
-        f"profitable. Maker execution clears the cost trivially but the "
-        f"fill-probability haircut is un-modelled here."
+        f"**Bottom line.** On corrected outcomes the cheap side is "
+        f"calibrated: the de-biased pooled gap is **{db_gap:+.2f}c** "
+        f"(cheap_ask {ask_gap:+.2f}c) and the per-slice gaps are all slightly "
+        f"negative. The only bin with a CI-separated positive gap is the "
+        f"extreme cheap tail (cheap_mid<0.07, ~+7c) -- a residual "
+        f"longshot effect on a tiny, sub-taker-cost slice of the curve, not a "
+        f"tradeable calibration edge. The tick-pooled method gives a "
+        f"near-identical ~0c pooled gap, so the tick-weighting bias is moot "
+        f"here -- there is no apparent edge for it to inflate. The earlier "
+        f"corrupt-label finding of a large (~+12c) cheap-side calibration "
+        f"edge was driven entirely by wrong outcome labels and is withdrawn. "
+        f"There is no tradeable calibration edge."
     )
     return "\n".join(lines)
 

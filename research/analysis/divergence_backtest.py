@@ -15,12 +15,12 @@ fair value. The hypothesis tested here, head-on:
 
 The trap this script is built to catch
 --------------------------------------
-There is a SEPARATE, already-known effect: the cheap side of these markets
-beats its own price (Task 6/8 -- longshot OVER-pricing; a side priced 0.08
-resolves ~0.27). A naive "buy the cheap side" rule harvests that. The
-divergence signal, because a large `fair - ask` gap is easiest to reach on a
-LOW-ask side, will mechanically select cheap sides -- and then look profitable
-purely from the longshot mispricing, with NO lead-lag content of its own.
+On corrected data a small residual longshot effect remains: the extreme cheap
+tail (cheap_mid < 0.07, a side priced ~3c) resolves slightly above its price
+(~10c). The divergence signal, because a large `fair - ask` gap is easiest to
+reach on a LOW-ask side, will mechanically select cheap sides -- so it must be
+compared against a price-matched cheap-side baseline to isolate any genuine
+surface content from cheap-side selection.
 
 So the decisive question is NOT "is the divergence backtest positive" (it
 trivially is -- it is buying cheap sides). It is: **does the divergence signal
@@ -782,6 +782,16 @@ def _build_doc(kfold: dict, lodo: dict, shuf: dict, flat: dict,
     L.append("# Divergence edge -- decisive out-of-fold backtest")
     L.append("")
     L.append(
+        "**RE-RUN ON CORRECTED DATA (real Polymarket outcomes) -- supersedes "
+        "the earlier corrupt-label results.** The strike bug "
+        "(`docs/research/phase0_audit.md` Task 8c; old labels wrong on ~31% "
+        "of windows) is fixed. `windows.parquet`, `ticks_15m.parquet` and "
+        "`entry_candidates_15m.parquet` now carry the true Polymarket-resolved "
+        "outcomes and corrected strikes / `move_pct`. Every conclusion below "
+        "is re-derived on the corrected data; the earlier positive divergence "
+        "finding is invalid.")
+    L.append("")
+    L.append(
         "The decisive test of the spot-divergence edge surfaced in Task 8 "
         "(`research/analysis/fair_value_tri.py`). Supersedes Task 9 of "
         "`docs/superpowers/plans/2026-05-22-edge-discovery-phase2-4.md`. "
@@ -799,15 +809,15 @@ def _build_doc(kfold: dict, lodo: dict, shuf: dict, flat: dict,
         "repriced).")
     L.append("")
     L.append(
-        "**The trap this backtest is built to catch.** There is a SEPARATE, "
-        "already-known effect: the cheap side of these markets beats its own "
-        "price (Task 6/8 longshot OVER-pricing -- a side priced 0.08 resolves "
-        "~0.27). A large `fair - ask` divergence is easiest to reach on a "
-        "LOW-ask side, so the divergence signal mechanically selects cheap "
-        "sides and will look profitable purely from that longshot mispricing, "
-        "with NO lead-lag content of its own. The decisive question is "
-        "therefore not 'is the divergence backtest positive' (it trivially is "
-        "-- it is buying cheap sides) but **'does the divergence signal beat a "
+        "**The trap this backtest is built to catch.** A small residual "
+        "longshot effect remains on corrected data: the extreme cheap tail "
+        "(`cheap_mid < 0.07`, a side priced ~3c) resolves slightly above its "
+        "price (~10c). A large `fair - ask` divergence is easiest to reach on "
+        "a LOW-ask side, so the divergence signal mechanically selects cheap "
+        "sides; the price-matched price-only baseline below isolates and "
+        "subtracts that cheap-side selection so any remaining advantage is "
+        "genuine surface content. The decisive question is therefore "
+        "**'does the divergence signal beat a "
         "price-matched cheap-side baseline?'** That comparison is the spine of "
         "this document.")
     L.append("")
@@ -921,8 +931,15 @@ def _build_doc(kfold: dict, lodo: dict, shuf: dict, flat: dict,
             f"**{mb_div['win_rate']:.1%}** of the time vs the price-only "
             f"baseline's **{mb_pri['win_rate']:.1%}** -- a "
             f"**{wr_gap:+.0f} percentage-point** win-rate gap with the same "
-            f"capital at risk. This is the surface adding genuine content: it "
-            f"is not buying cheaper, it is buying the RIGHT side.")
+            f"capital at risk. "
+            + ("A POSITIVE gap would be the surface adding genuine "
+               "spot-distance content. On corrected data the gap is "
+               "NEGATIVE: at a matched price the surface selects the winning "
+               "side LESS often than picking the cheap side at random -- it "
+               "has no usable content."
+               if wr_gap <= 0 else
+               "This is the surface adding genuine content: it is not buying "
+               "cheaper, it is buying the RIGHT side."))
     else:
         L.append("Too few trades in the band to compare.")
     L.append("")
@@ -1062,42 +1079,44 @@ def _verdict_text(kfold, lodo, shuf, flat, freq_table, best_key,
     mb_pri = matched["price"]
 
     L.append(
-        "**1. The divergence backtest is strongly positive -- and so is "
-        "buying the cheap side blind, but the divergence signal wins by a "
-        "real, separable margin.** Out-of-fold (day-blocked 5-fold), the "
-        f"divergence signal at the headline config (T={T_b}, "
-        f"{_pt_label(PT_b)}, taker) earns "
-        f"**${div_taker['mean_pnl']:+.3f}/trade** on a ${STAKE:.0f} stake "
-        f"(90% CI [${div_taker['ci'][0]:+.3f}, ${div_taker['ci'][1]:+.3f}], "
-        f"{div_taker['n']} trades, win rate {div_taker['win_rate']:.1%}, "
-        f"total ${div_taker['total_pnl']:+.0f}, green-day fraction "
-        f"{div_taker['green_day_frac']:.2f}). The price-matched price-only "
-        f"baseline -- buy the cheap side, no surface at all -- earns "
-        f"**${price_taker['mean_pnl']:+.3f}/trade** "
+        "*RE-RUN ON CORRECTED DATA (real Polymarket outcomes) -- supersedes "
+        "the earlier corrupt-label results. The strike bug (phase0_audit Task "
+        "8c) is fixed; outcomes are now the true Polymarket-resolved labels.*")
+    L.append("")
+
+    L.append(
+        f"**1. The divergence signal is NOT profitable out-of-fold on "
+        f"corrected data.** Out-of-fold (day-blocked 5-fold), the divergence "
+        f"signal at the headline config (T={T_b}, {_pt_label(PT_b)}, taker) "
+        f"earns **${div_taker['mean_pnl']:+.3f}/trade** on a ${STAKE:.0f} "
+        f"stake (90% CI [${div_taker['ci'][0]:+.3f}, "
+        f"${div_taker['ci'][1]:+.3f}], {div_taker['n']} trades, win rate "
+        f"{div_taker['win_rate']:.1%}, total ${div_taker['total_pnl']:+.0f}, "
+        f"green-day fraction {div_taker['green_day_frac']:.2f}). The "
+        f"price-matched price-only baseline -- buy the cheap side, no surface "
+        f"-- earns **${price_taker['mean_pnl']:+.3f}/trade** "
         f"(CI [${price_taker['ci'][0]:+.3f}, ${price_taker['ci'][1]:+.3f}], "
-        f"win rate {price_taker['win_rate']:.1%}). Both harvest the known "
-        "longshot OVER-pricing (Task 6/8); the question is whether the "
-        "surface adds anything on top.")
+        f"win rate {price_taker['win_rate']:.1%}). Both are negative as "
+        f"takers; neither survives the taker round-trip cost.")
     L.append("")
 
     if best_delta is not None:
         T, PT, dlt, d, p = best_delta
         nonoverlap = d["ci"][0] > p["ci"][1]
         L.append(
-            f"**2. Yes -- the divergence signal beats price-only, "
-            f"out-of-fold, with non-overlapping CIs.** The best "
-            f"divergence-minus-price-only delta over the taker grid is at "
-            f"T={T}, {_pt_label(PT)}: **${dlt:+.3f}/trade** (divergence "
-            f"${d['mean_pnl']:+.3f} [${d['ci'][0]:+.3f}, ${d['ci'][1]:+.3f}] "
-            f"vs price-only ${p['mean_pnl']:+.3f} [${p['ci'][0]:+.3f}, "
-            f"${p['ci'][1]:+.3f}]). "
-            + ("The two confidence intervals do NOT overlap -- the surface's "
-               "advantage is statistically separated from the cheap-side "
-               "baseline. "
-               if nonoverlap else
-               "The CIs overlap somewhat, so treat the margin cautiously. ")
-            + "Every taker cell of the delta table is positive (~$+2/trade); "
-            "it is not a one-config fluke.")
+            f"**2. The divergence signal does NOT beat the price-only "
+            f"baseline.** The BEST divergence-minus-price-only delta over the "
+            f"entire taker grid is at T={T}, {_pt_label(PT)}: "
+            f"**${dlt:+.3f}/trade** (divergence ${d['mean_pnl']:+.3f} "
+            f"[${d['ci'][0]:+.3f}, ${d['ci'][1]:+.3f}] vs price-only "
+            f"${p['mean_pnl']:+.3f} [${p['ci'][0]:+.3f}, ${p['ci'][1]:+.3f}]). "
+            + ("Even this best-case delta is negative -- the surface "
+               "subtracts value relative to blindly buying the cheap side. "
+               if dlt <= 0 else
+               "The CIs overlap, so this small positive delta is not "
+               "statistically distinguishable from zero. ")
+            + "Every other taker delta cell is also negative. The surface "
+            "adds nothing on corrected labels.")
     else:
         L.append("**2.** Too few trades to compare.")
     L.append("")
@@ -1105,50 +1124,48 @@ def _verdict_text(kfold, lodo, shuf, flat, freq_table, best_key,
     if mb_div.get("n", 0) and mb_pri.get("n", 0):
         wr_gap = (mb_div["win_rate"] - mb_pri["win_rate"]) * 100
         L.append(
-            f"**3. The cleanest proof: a matched entry-ask band.** Restricting "
-            f"BOTH rules to a fixed ask band {matched['band']} -- so every "
-            f"trade is bought at the same price -- the divergence signal's "
-            f"selected side wins **{mb_div['win_rate']:.1%}** vs the "
-            f"price-only baseline's **{mb_pri['win_rate']:.1%}**, a "
-            f"**{wr_gap:+.0f} percentage-point** win-rate gap at identical "
-            f"capital. The surface is not buying cheaper -- it is buying the "
-            f"RIGHT side. PnL/trade in the band: divergence "
-            f"${mb_div['mean_pnl']:+.3f} vs price-only "
-            f"${mb_pri['mean_pnl']:+.3f}. This removes the cheap-side-mix "
-            "confound entirely and is the decisive evidence that the surface "
-            "carries genuine spot-distance content.")
+            f"**3. The confound-free matched-ask-band test: the surface picks "
+            f"the WRONG side.** Restricting BOTH rules to a fixed ask band "
+            f"{matched['band']} -- so every trade is bought at the same price "
+            f"-- the divergence signal's selected side wins "
+            f"**{mb_div['win_rate']:.1%}** vs the price-only baseline's "
+            f"**{mb_pri['win_rate']:.1%}**, a **{wr_gap:+.0f} "
+            f"percentage-point** win-rate gap at identical capital "
+            f"(divergence n={mb_div['n']}, price-only n={mb_pri['n']}). "
+            + ("The gap is NEGATIVE: at a matched entry price the surface "
+               "actually selects the LOSING side more often than picking "
+               "the cheap side at random. The surface carries no usable "
+               "spot-distance content on corrected data. "
+               if wr_gap <= 0 else
+               "The gap is small and not decisive. ")
+            + f"PnL/trade in the band: divergence ${mb_div['mean_pnl']:+.3f} "
+            f"vs price-only ${mb_pri['mean_pnl']:+.3f}.")
     L.append("")
 
     L.append(
-        f"**4. The flat-surface null confirms it; the shuffled-outcome null "
-        f"is misleading and is discounted.** Replacing the surface with a "
-        f"constant (zero spot information) drops the signal to "
-        f"**${flat['mean_pnl']:+.3f}/trade** -- right on the price-only "
-        f"baseline (${price_taker['mean_pnl']:+.3f}) and far below the real "
-        f"divergence signal (${div_taker['mean_pnl']:+.3f}). That gap is the "
-        f"surface's contribution. The shuffled-outcome null comes out HIGHER "
-        f"(${shuf['mean']:+.3f}/trade) -- NOT because of leakage, but because "
-        f"a noise surface clears the threshold on the very cheapest sides "
-        f"(mean ask ~0.29 vs the real signal's ~0.48), and the cheapest "
-        f"sides carry the largest longshot gap. The shuffled-outcome null "
-        f"conflates surface-destruction with a shift to cheaper sides, so it "
-        f"is not a clean control here; the flat-surface null and the "
-        f"matched-band comparison are.")
+        f"**4. Null tests.** Flat-surface null (T={T_b}, {_pt_label(PT_b)}, "
+        f"taker): **${flat['mean_pnl']:+.3f}/trade** over {flat['n']} trades "
+        f"-- replacing the surface with a constant. The real divergence "
+        f"signal (${div_taker['mean_pnl']:+.3f}) is NOT meaningfully better "
+        f"than this null; there is no surface contribution to detect. The "
+        f"shuffled-outcome null comes out at **${shuf['mean']:+.3f}/trade** "
+        f"(std ${shuf['std']:.3f}). As documented, the shuffled null does not "
+        f"collapse to zero and is not a clean control for this signal -- a "
+        f"noise surface produces extreme cell values and clears the "
+        f"threshold on the very cheapest sides, harvesting the longshot "
+        f"OVER-pricing tail. It is reported for completeness only. The "
+        f"flat-surface null and the matched-band comparison are the decisive "
+        f"controls, and both say there is no edge.")
     L.append("")
 
     L.append(
-        "**5. What the edge actually is -- a slow-book / lead-lag dislocation "
-        "at window open.** ~74% of trades enter at `seconds_into_window=0`. "
-        "At window open the strike is fixed (it is the prior window's open "
-        "price) and the spot has ALREADY moved off it -- but the Polymarket "
-        "book opens near 50/50. A window whose spot is >=0.5% from strike at "
-        "t=0 has its favoured side offered at ~0.48 and that side wins ~95% "
-        "of the time; even 2 minutes in it is still only ~0.54 and wins "
-        "~93%. The book reprices slowly. The empirical surface, knowing "
-        "`move_pct` x `time_left`, identifies the favoured side while it is "
-        "still cheap. This is a genuine, sign-correct informational edge, "
-        "and the surface is well-calibrated out-of-fold (predicted 0.70 -> "
-        "realized 0.68; predicted 0.91 -> realized 0.89).")
+        "**5. The old t=0 tautology is gone.** On the earlier corrupt labels "
+        "the strike was mis-set and `move_pct` at window open was non-zero, "
+        "making the divergence signal partly tautological at t=0. With the "
+        "corrected strike, `move_pct` at window open is ~0 by construction "
+        "(strike = spot at open). The signal now genuinely has to predict, "
+        "and on real outcomes it does not: it picks the wrong side at "
+        "matched prices and loses money out-of-fold.")
     L.append("")
 
     if lodo_taker.get("n", 0):
@@ -1156,69 +1173,63 @@ def _verdict_text(kfold, lodo, shuf, flat, freq_table, best_key,
             f"**6. Leave-one-day-out agrees.** Same config under LODO: "
             f"${lodo_taker['mean_pnl']:+.3f}/trade "
             f"(CI [${lodo_taker['ci'][0]:+.3f}, ${lodo_taker['ci'][1]:+.3f}], "
-            f"{lodo_taker['n']} trades) -- consistent with the 5-fold result. "
-            "The edge is stable across both splitters.")
+            f"{lodo_taker['n']} trades) -- the negative result is consistent "
+            f"across both splitters; it is not a 5-fold artifact.")
         L.append("")
 
-    # Final tag -- real if matched-band win-rate gap is large and delta CIs
-    # are separated.
+    # Final tag -- real only if matched-band win-rate gap is materially
+    # positive AND the best delta CI is separated from the baseline.
     matched_real = (mb_div.get("n", 0) >= 100 and mb_pri.get("n", 0) >= 100
                     and (mb_div["win_rate"] - mb_pri["win_rate"]) > 0.05)
     delta_real = (best_delta is not None
+                  and best_delta[2] > 0
                   and best_delta[3]["ci"][0] > best_delta[4]["ci"][1])
     real = matched_real and delta_real
 
     if real:
         tag = ("REAL EDGE -- the divergence signal beats a price-matched "
-               "cheap-side baseline out-of-fold, with non-overlapping CIs and "
-               "a large win-rate gap at identical prices, stable across both "
-               "splitters. It is a genuine slow-book / lead-lag dislocation "
-               "at window open, NOT merely the longshot mispricing "
-               "re-harvested. It IS worth taking to the sealed hold-out -- "
-               "with the cost caveats below treated as the gating risk.")
+               "cheap-side baseline out-of-fold, with separated CIs and a "
+               "win-rate gap at identical prices.")
     else:
-        tag = ("NOT a clean separable edge -- the divergence signal does not "
-               "convincingly beat the price-matched baseline out-of-fold.")
+        tag = ("NO EDGE -- on corrected (real Polymarket) outcomes the "
+               "divergence signal is unprofitable out-of-fold, loses to the "
+               "price-only baseline at every threshold, and at a matched "
+               "entry price picks the winning side LESS often than chance. "
+               "The earlier corrupt-label 'real edge' was an artifact of the "
+               "strike bug. The signal must NOT be taken to the sealed "
+               "hold-out as a candidate strategy.")
     L.append(f"**TAG: {tag}**")
     L.append("")
 
     L.append(
-        f"**Honest bottom line.** There is a real, out-of-fold, "
-        f"cost-aware edge. The divergence signal earns "
-        f"~${div_taker['mean_pnl']:+.2f}/trade as a taker "
-        f"(~${div_taker['mean_pnl'] - price_taker['mean_pnl']:+.2f}/trade "
-        f"OVER a price-matched cheap-side baseline), wins ~{div_taker['win_rate']:.0%} "
-        f"of the time, and -- the decisive proof -- at a FIXED entry price it "
-        f"picks the winning side ~{(mb_div['win_rate']-mb_pri['win_rate'])*100:.0f} "
-        f"points more often than buying the cheap side blind. The economic "
-        f"story is sound: the Polymarket book opens 15-minute crypto windows "
-        f"near 50/50 while the spot has already moved off a fixed strike, and "
-        f"it reprices slowly. With ~{div_taker['n']} trades over 6 dev days "
-        f"that is roughly {div_taker['n'] / 6:.0f} trades/day at ${STAKE:.0f} "
-        f"stake, ~${div_taker['mean_pnl'] * div_taker['n'] / 6:+.0f}/day "
-        f"out-of-fold. As a MAKER the headline number is "
-        f"${div_maker['mean_pnl']:+.2f}/trade, but that ignores the "
-        f"fill-probability haircut and is an optimistic upper bound -- the "
-        f"taker number is the one to trust. This is worth taking to the "
-        f"sealed hold-out; the hold-out result, plus an honest fill/fee "
-        f"stress test, decide whether it goes live.")
+        f"**Honest bottom line.** On corrected data there is no divergence "
+        f"edge. The divergence signal loses ~${-div_taker['mean_pnl']:.2f}"
+        f"/trade as a taker, wins only ~{div_taker['win_rate']:.0%} of the "
+        f"time, and underperforms a price-matched cheap-side baseline by "
+        f"~${price_taker['mean_pnl'] - div_taker['mean_pnl']:.2f}/trade. The "
+        f"matched-ask-band test -- the cleanest, confound-free check -- shows "
+        f"the surface picks the winning side "
+        f"{abs((mb_div['win_rate']-mb_pri['win_rate'])*100):.0f} points LESS "
+        f"often than chance at identical prices. As a MAKER the headline "
+        f"number is ${div_maker['mean_pnl']:+.2f}/trade, but its CI "
+        f"[${div_maker['ci'][0]:+.2f}, ${div_maker['ci'][1]:+.2f}] straddles "
+        f"zero, the maker path ignores the fill-probability haircut, and the "
+        f"price-only maker baseline is just as good -- so the maker number is "
+        f"not evidence of an edge either. The earlier corrupt-label result "
+        f"that called this a 'real slow-book lead-lag edge' was driven "
+        f"entirely by the strike bug (wrong labels on ~31% of windows plus a "
+        f"t=0 `move_pct` tautology). It is invalid. Nothing here should go to "
+        f"the sealed hold-out.")
     L.append("")
     L.append(
-        "**Risks / caveats (the real gating items).** "
-        "(i) The taker model charges the 0.07*p*(1-p) fee on the entry leg "
-        "but NOT an exit fee at resolution (resolution is a settlement) and "
-        "no Polymarket settlement fee -- if such a fee exists the per-trade "
-        "edge shrinks. (ii) It assumes the displayed ask fills at the full "
-        "$10 size; thin books at window open could mean worse fills -- the "
-        "true edge is somewhat thinner than ${0}. (iii) The 1 Hz dataset is "
-        "~87% stale books (Phase 0); if the live book reprices FASTER than "
-        "this feed shows, the real divergence window is shorter and the edge "
-        "smaller. (iv) Only 6 dev days, 4 of them full -- the daily series is "
-        "short; the sealed hold-out (May 21-22) is the real test of "
-        "generalization. (v) The signal fires mostly at t=0 -- execution must "
-        "be fast at window open, which is an operational risk for a live "
-        "bot. (vi) The maker path is an optimistic upper bound only.".format(
-            f"{div_taker['mean_pnl']:.2f}"))
+        "**Caveats on this re-run.** (i) Only 6 dev days, 4 of them full -- "
+        "a short series; but the negative result is consistent across "
+        "5-fold and leave-one-day-out and across every threshold, so it is "
+        "not a single-split fluke. (ii) The taker cost model charges the "
+        "0.07*p*(1-p) entry fee but no settlement fee; a settlement fee "
+        "would make the negative result worse, not better. (iii) The maker "
+        "path is an optimistic upper bound (no fill haircut) and is still "
+        "not an edge. (iv) The sealed hold-out (May 21-22) was NOT touched.")
     return "\n".join(L)
 
 

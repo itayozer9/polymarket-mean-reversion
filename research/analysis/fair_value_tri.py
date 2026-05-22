@@ -629,18 +629,24 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
     L.append("## Task 8 -- Fair-value triangulation & the decisive diagnostic")
     L.append("")
     L.append(
-        "**The question.** Tasks 6/6b found the cheap (dip-buyer's) side "
-        "appears under-priced by ~+12c (de-biased pooled gap; the calibration "
-        "showed sides priced ~0.14 resolving ~0.31). Task 7 found this edge is "
-        "roughly UNIFORM across sigma-proximity -- equally large where "
-        "sigma-proximity says the market is already decided (sigma>4) as where "
-        "it says coin-flip. A *decided* market's underdog winning ~27% of the "
-        "time is near-impossible if sigma-proximity is a correct measure of "
-        "decided-ness. This section triangulates three independent estimates "
-        "of what the cheap side is worth -- the **market** mid, the "
+        "**RE-RUN ON CORRECTED DATA (real Polymarket outcomes) -- supersedes "
+        "the earlier corrupt-label results.** The strike bug "
+        "(`docs/research/phase0_audit.md` Task 8c; old labels wrong on ~31% "
+        "of windows) is fixed; the cross-section now carries the true "
+        "Polymarket-resolved outcomes and corrected strikes / `move_pct`. The "
+        "earlier corrupt-label Task 8 (which reported a ~+12c cheap-side "
+        "headline) is invalid."
+    )
+    L.append("")
+    L.append(
+        "**The question.** Tasks 6b/7 re-run on corrected data find the cheap "
+        "(dip-buyer's) side is no longer materially under-priced overall -- "
+        "the de-biased pooled gap is ~-1c (it was a spurious ~+12c on the "
+        "corrupt labels). This section triangulates three independent "
+        "estimates of what the cheap side is worth -- the **market** mid, the "
         "**theoretical** Bachelier value, and a **model-free empirical** "
-        "frequency surface -- to settle whether the edge is real or an "
-        "artifact. Dev split May 15-20 only; sealed hold-out (May 21-22) NOT "
+        "frequency surface -- to settle whether any tradeable edge survives. "
+        "Dev split May 15-20 only; sealed hold-out (May 21-22) NOT "
         "touched. Cross-section: the de-biased one-obs-per-(window,time-slice) "
         f"cross-section, **{decomp_is['n']:,} observations**, "
         f"**{decomp_is['n_windows']:,} windows**."
@@ -662,18 +668,18 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
     L.append("")
     last = job1["rows"][-1]
     L.append(
-        f"**sigma-proximity is comprehensively broken.** In the most-"
-        f"decided bin (`sigma_proximity > 4`) Bachelier says the favourite "
-        f"wins with probability **{last['bach_fav_prob']:.4f}** -- a "
-        f"certainty. The favourite actually wins only "
-        f"**{last['actual_fav_won']:.3f}** "
+        f"**sigma-proximity is broken.** In the most-decided bin "
+        f"(`sigma_proximity > 4`) Bachelier says the favourite wins with "
+        f"probability **{last['bach_fav_prob']:.4f}** -- a certainty. The "
+        f"favourite actually wins only **{last['actual_fav_won']:.3f}** "
         f"(90% CI [{last['ci_lo']:.3f}, {last['ci_hi']:.3f}]). A market that "
-        f"sigma-proximity rates as 4+ sigmas decided is, in reality, barely "
-        f"better than a 60/40 shot. The actual favourite win rate rises only "
-        f"gently and monotonically with sigma_proximity "
+        f"sigma-proximity rates as 4+ sigmas decided is, in reality, only an "
+        f"~{last['actual_fav_won']*100:.0f}/{(1-last['actual_fav_won'])*100:.0f} "
+        f"shot. The actual favourite win rate rises only gently and "
+        f"monotonically with sigma_proximity "
         f"({job1['rows'][0]['actual_fav_won']:.3f} at sigma<0.5 -> "
         f"{last['actual_fav_won']:.3f} at sigma>4) -- it carries a *little* "
-        f"ordinal information but is wildly mis-scaled as a probability."
+        f"ordinal information but is badly mis-scaled as a probability."
     )
     L.append("")
     L.append(
@@ -686,9 +692,10 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
         f"{vol['ratio_p25']:.2f}-{vol['ratio_p75']:.2f}) -- it under-states "
         f"true volatility by ~{(1 - vol['ratio_median']) * 100:.0f}%. That "
         f"alone inflates the Bachelier z by ~{1 / vol['ratio_median']:.2f}x. "
-        f"But a ~1.3x vol correction is nowhere near enough to drag a "
-        f"99.9998% implied certainty down to a realized 64%: that gap is "
-        f"orders of magnitude. The deeper failure is structural -- a "
+        f"But a ~{1/vol['ratio_median']:.1f}x vol correction is nowhere near "
+        f"enough to drag a ~{last['bach_fav_prob']*100:.2f}% implied "
+        f"certainty down to a realized ~{last['actual_fav_won']*100:.0f}%: "
+        f"that gap is far too large. The deeper failure is structural -- a "
         f"driftless-Gaussian model run on a stale-ish 1 Hz feed treats every "
         f"basis point of `move_pct` as locked in, but crypto over a 15-minute "
         f"window mean-reverts and jumps; the spot crosses back through the "
@@ -791,10 +798,11 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
         )
     L.append("")
     L.append(
-        "The three-part structure -- a large loss in the near-decided-against "
-        "bin, a small genuine gain in the contested bin, and a huge gain in "
-        "the cheap-side-actually-favoured bin -- is consistent across all four "
-        "coins; this is not a one-symbol artifact."
+        "The decomposition structure -- the near-decided/underdog and "
+        "contested bins roughly break even or lose, the only positive bin "
+        "being the small cheap-side-actually-favoured tail -- is consistent "
+        "across the four coins; this is not a one-symbol artifact, but it is "
+        "also not a tradeable edge (see the verdict)."
     )
     L.append("")
 
@@ -814,9 +822,9 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
         f"this equals the naive edge); **taker** net PnL = "
         f"**{tmid * 100:+.2f}c per \\$1 stake** "
         f"(90% CI [{tlo * 100:+.2f}, {thi * 100:+.2f}]c, after paying "
-        f"`cheap_ask` and the `0.07*p*(1-p)` fee on both legs). The taker CI "
-        f"straddles zero -- as a taker the contested edge is not reliably "
-        f"profitable."
+        f"`cheap_ask` and the `0.07*p*(1-p)` fee on both legs). On corrected "
+        f"data both the maker and taker numbers for the contested band are "
+        f"negative -- there is no contested-band edge to harvest."
     )
     L.append("")
 
@@ -838,25 +846,26 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
     win_contrib = win["contrib_c"]
 
     L.append(
-        f"**1. sigma-proximity is broken -- and that resolves the Task 7 "
-        f"paradox.** Bachelier on `realized_vol` says a `sigma>4` market's "
-        f"favourite wins ~99.9998% of the time; it actually wins ~64%. The "
+        f"**1. sigma-proximity is broken.** Bachelier on `realized_vol` says "
+        f"a `sigma>4` market's favourite wins "
+        f"~{job1['rows'][-1]['bach_fav_prob']*100:.2f}% of the time; it "
+        f"actually wins ~{job1['rows'][-1]['actual_fav_won']*100:.0f}%. The "
         f"fix is not a tweak: `realized_vol` under-states true vol by a factor "
         f"~{1 / vol['ratio_median']:.2f} (median ratio {vol['ratio_median']:.2f}), "
         f"and even fully correcting that leaves a Gaussian-random-walk model "
         f"that ignores the mean-reversion and jumpiness of 15-minute crypto. "
         f"sigma-proximity should be treated as -- at best -- a weak ordinal "
-        f"rank, never as a probability of decided-ness. Task 7's finding that "
-        f"the edge is 'uniform across sigma-proximity' is therefore NOT "
-        f"evidence the edge is an artifact; it just means sigma-proximity does "
-        f"not separate decided from contested markets. The real separator is "
-        f"the model-free empirical fair value built in Job 2."
+        f"rank, never as a probability of decided-ness. The real separator of "
+        f"decided vs contested is the model-free empirical fair value built "
+        f"in Job 2."
     )
     L.append("")
     L.append(
-        f"**2. The +{decomp_oof['headline_c']:.1f}c headline is NOT one "
-        f"phenomenon -- it is three, and they nearly cancel.** Decomposed by "
-        f"genuine (empirical) decided-ness, out-of-fold:"
+        f"**2. The headline is ~0c on corrected data -- it is a mix of "
+        f"opposing pieces that nearly cancel.** The whole-cross-section "
+        f"naive cheap-side edge is **{decomp_oof['headline_c']:+.1f}c** "
+        f"(essentially zero / slightly negative). Decomposed by genuine "
+        f"(empirical) decided-ness, out-of-fold:"
     )
     L.append("")
     L.append(
@@ -871,12 +880,15 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
         f"losers. Contribution to the headline: **{decided_contrib:+.1f}c** "
         f"(it drags the headline DOWN)."
     )
+    _ct_word = ("a small net under-pricing of contested markets"
+                if (ct1['naive_edge_c'] + ct2['naive_edge_c']) > 0 else
+                "no under-pricing of contested markets -- the cheap buyer "
+                "loses slightly here too")
     L.append(
         f"- **Genuinely contested (empirical fair 0.25-0.55), "
         f"~{ct1['weight'] + ct2['weight']:.0%} of observations.** Naive edge "
         f"**{ct1['naive_edge_c']:+.1f}c** and **{ct2['naive_edge_c']:+.1f}c** "
-        f"-- a small, genuine under-pricing of contested markets. "
-        f"Contribution: **{contested_contrib:+.1f}c**."
+        f"-- {_ct_word}. Contribution: **{contested_contrib:+.1f}c**."
     )
     L.append(
         f"- **Cheap-side-actually-favoured (empirical fair > 0.55), "
@@ -890,67 +902,71 @@ def _build_section(job1, vol, surface, decomp_is, decomp_oof,
     contested_naive_c = cost["naive"][1] * 100
     contested_naive_ci = (cost["naive"][0] * 100, cost["naive"][2] * 100)
     L.append(
-        f"So of the +{decomp_oof['headline_c']:.1f}c headline: "
-        f"**~{decided_contrib:+.1f}c is the longshot-over-pricing tail where "
-        f"the cheap buyer loses**, **~{contested_contrib:+.1f}c is genuine "
-        f"contested-market under-pricing**, and "
-        f"**~{win_contrib:+.1f}c comes entirely from the bin where the "
-        f"'cheap' side is actually the favourite.** Pooling these into a "
-        f"single '+12c cheap-side edge' is the artifact -- it averages a "
-        f"losing longshot tail against a winning favoured tail and reports the "
-        f"residual as if it were a uniform edge. It is not. Across the whole "
-        f"genuinely-contested band (empirical fair 0.25-0.55, "
-        f"n={cost['n']:,} obs) the naive edge is only "
-        f"**~+{contested_naive_c:.1f}c** "
+        f"So of the {decomp_oof['headline_c']:+.1f}c headline: "
+        f"**~{decided_contrib:+.1f}c is the longshot/underdog tail (cheap "
+        f"side priced ABOVE its true win rate -- the cheap buyer LOSES)**, "
+        f"**~{contested_contrib:+.1f}c is the contested band**, and "
+        f"**~{win_contrib:+.1f}c comes from the small bin where the 'cheap' "
+        f"side is actually the favourite.** The pieces nearly cancel; the net "
+        f"is ~0c. Across the whole genuinely-contested band (empirical fair "
+        f"0.25-0.55, n={cost['n']:,} obs) the naive edge is "
+        f"**{contested_naive_c:+.1f}c** "
         f"(90% CI [{contested_naive_ci[0]:+.1f}, "
-        f"{contested_naive_ci[1]:+.1f}]c) -- positive, but barely distinct "
-        f"from zero."
+        f"{contested_naive_ci[1]:+.1f}]c) -- "
+        + ("negative: there is no contested-band under-pricing on corrected "
+           "labels."
+           if contested_naive_c <= 0 else
+           "small and barely distinct from zero.")
     )
     L.append("")
     L.append(
-        f"**3. Is the genuine part big enough to trade?** No -- not as stated. "
-        f"The genuinely-contested band (empirical fair 0.25-0.55) has a naive "
-        f"edge of ~+{contested_naive_c:.1f}c, which is a **maker** net of "
-        f"~+{mmid * 100:.1f}c per \\$1 "
-        f"(CI [{mlo * 100:+.1f}, {mhi * 100:+.1f}]c) but a **taker** net of "
-        f"only ~+{tmid * 100:.1f}c with a CI "
-        f"([{tlo * 100:+.1f}, {thi * 100:+.1f}]c) that straddles zero -- the "
-        f"~16-21% taker round-trip cost eats it. The big "
-        f"+{win['naive_edge_c']:.0f}c 'cheap-side-actually-favoured' bin is "
-        f"real money, but it is NOT a dip-buying edge: it requires "
-        f"identifying, in advance, that a side priced as an underdog is "
-        f"actually the favourite -- i.e. it requires the very fair-value model "
-        f"built here. Buying every cheap side blind does not capture it; "
-        f"buying every cheap side blind earns the "
-        f"+{decomp_oof['headline_c']:.1f}c headline, which is below taker cost "
-        f"and barely positive even as a maker."
+        f"**3. Is anything big enough to trade? No.** The genuinely-contested "
+        f"band (empirical fair 0.25-0.55) has a naive edge of "
+        f"{contested_naive_c:+.1f}c -- a **maker** net of "
+        f"{mmid * 100:+.1f}c per \\$1 (CI [{mlo * 100:+.1f}, "
+        f"{mhi * 100:+.1f}]c) and a **taker** net of {tmid * 100:+.1f}c "
+        f"(CI [{tlo * 100:+.1f}, {thi * 100:+.1f}]c). "
+        + ("Both are negative -- the contested band loses money on corrected "
+           "data even as a maker."
+           if (mmid <= 0 and tmid <= 0) else
+           "The taker number does not clear the ~16-21% round-trip cost.")
+        + f" The only positive pocket is the small "
+        f"cheap-side-actually-favoured bin (empirical fair > 0.55, "
+        f"~{win['weight']:.0%} of observations, naive edge "
+        f"{win['naive_edge_c']:+.0f}c). That is NOT a dip-buying edge: it is "
+        f"the bin where a side priced as an underdog is in truth the "
+        f"favourite, i.e. it requires the empirical fair-value model to "
+        f"identify it in advance. The divergence backtest "
+        f"(`divergence_backtest.py`) tests exactly that signal "
+        f"out-of-fold -- and finds it does NOT survive (see "
+        f"`divergence_edge.md`)."
+    )
+    L.append("")
+    win_oof = win["naive_edge_c"]
+    L.append(
+        f"**TAG: NO TRADEABLE EDGE on corrected data.** On real Polymarket "
+        f"outcomes the cheap-side headline is ~0c, the genuinely-contested "
+        f"band is {contested_naive_c:+.1f}c naive (negative even as a maker), "
+        f"and sigma-proximity is a broken decided-ness measure. The one "
+        f"positive pocket -- the cheap-side-actually-favoured bin -- is small "
+        f"(~{win['weight']:.0%} of observations) and only capturable with a "
+        f"fair-value model; the out-of-fold divergence backtest shows that "
+        f"model does not generalize to a profitable rule. The earlier "
+        f"corrupt-label Task 8 'partially real' verdict was an artifact of "
+        f"the strike bug and is withdrawn."
     )
     L.append("")
     L.append(
-        "**TAG: PARTIALLY REAL, MOSTLY MIS-FRAMED.** There is a genuine "
-        "market inefficiency -- the market is poorly calibrated, over-pricing "
-        "near-certain losers and under-pricing some contested and "
-        "actually-favoured sides. But the headline '+12c cheap-side edge' is "
-        "an artifact of pooling a losing longshot tail with a winning "
-        f"favoured tail. The genuine, sign-correct, contested-market "
-        f"under-pricing is small (~+{contested_naive_c:.0f}c naive), survives "
-        f"as a MAKER only, and "
-        "does NOT clear the 16-21% taker cost. sigma-proximity must be dropped "
-        "as a decided-ness filter; the model-free empirical fair-value surface "
-        "(Job 2) is the correct conditioner and is the only thing that turns "
-        "the large favoured-side mispricing into something tradeable."
-    )
-    L.append("")
-    L.append(
-        "**Bottom line for Phase 5.** Do not build a strategy that buys 'the "
-        "cheap side' on price alone -- that pools the longshot-over-pricing "
-        "loss into the result. Build instead on the empirical fair-value "
-        "surface: buy a side only when its empirical fair value materially "
-        "exceeds its mid (the favoured-side and contested-band mispricings), "
-        "as a maker, and never condition on sigma-proximity. Even then, "
-        "expect a thin edge -- net-of-cost it is single-digit cents per "
-        "trade, and the sealed hold-out must confirm the empirical surface "
-        "generalizes before any of this is trusted."
+        "**Bottom line for Phase 5.** On corrected data there is no "
+        "cost-surviving cheap-side edge: not as a flat rule, not in the "
+        "contested band, not via the empirical fair-value surface. "
+        "sigma-proximity must be dropped as a decided-ness filter regardless "
+        "(it is genuinely broken). The model-free empirical fair-value "
+        "surface is the right diagnostic, but on real outcomes it does not "
+        "expose a tradeable mispricing -- the divergence backtest is the "
+        "decisive out-of-fold confirmation of that. No strategy should be "
+        "built on this; the sealed hold-out is not warranted for a signal "
+        "that already fails out-of-fold on dev."
     )
     L.append("")
     L.append("**Charts:**")

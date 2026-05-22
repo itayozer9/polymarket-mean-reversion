@@ -610,12 +610,18 @@ def _verdict(xs, one_dim, sig_drop, qualifying, q1, q2) -> str:
 
     overall = xs["edge"].mean()
     lines.append(
+        "**RE-RUN ON CORRECTED DATA (real Polymarket outcomes) -- supersedes "
+        "the earlier corrupt-label results.** The strike bug "
+        "(`phase0_audit.md` Task 8c) is fixed; this edge map is re-derived on "
+        "the true Polymarket-resolved outcomes."
+    )
+    lines.append("")
+    lines.append(
         f"Overall de-biased cheap-side edge across the whole cross-section = "
-        f"**{_fmt_c(overall)}** (this matches Task 6b's ~+12c pooled gap). "
-        f"Task 7 asks the sharper question: is that edge **concentrated** in a "
-        f"buyable corner, or **uniform** -- and crucially does it sit at LOW "
-        f"sigma-proximity (a genuine panic overshoot, the H8/H2 thesis) or "
-        f"everywhere (suspicious)."
+        f"**{_fmt_c(overall)}** (consistent with Task 6b's re-run pooled gap "
+        f"of ~-1c; the cheap side is essentially calibrated overall). Task 7 "
+        f"asks the sharper question: is there ANY conditioned corner with a "
+        f"CI-separated edge that survives both-halves dev-internal CV."
     )
     lines.append("")
 
@@ -734,27 +740,37 @@ def _verdict(xs, one_dim, sig_drop, qualifying, q1, q2) -> str:
     # --- CV result ---
     lines.append("**Dev-internal cross-validation (both-halves check).**")
     if qualifying:
+        # Classify qualifying cells by sign and by sigma region.
+        pos_q = [r for r in qualifying if r["early"]["mean_edge"] > 0]
+        hi_sig_pos = [r for r in pos_q
+                      if "2-4" in str(r["label"]) or ">4" in str(r["label"])]
         lines.append(
             f"- {len(qualifying)} cell(s) QUALIFY: edge CI excludes zero, "
             f"same direction, n_windows >= {MIN_WINDOWS_CELL} on BOTH the "
             f"early (May 15-17) and later (May 18-20) dev halves. See the "
-            f"qualifying-cells table above."
+            f"qualifying-cells table above. Of these, {len(pos_q)} carry a "
+            f"POSITIVE edge."
         )
-        # Are any qualifying cells low-sigma?
-        low_q = [r for r in qualifying
-                 if "<0.5" in str(r["label"]) or "0.5-1" in str(r["label"])
-                 or str(r["label"]) in ("0.05-0.15", "0.15-0.25")]
-        if low_q:
+        if hi_sig_pos:
             lines.append(
-                f"- {len(low_q)} of the qualifying cell(s) sit at LOW "
-                f"sigma-proximity or in the cheap-price tail -- the corner "
-                f"the panic-overshoot thesis predicts."
+                f"- The positive qualifying cell(s) sit at HIGH "
+                f"sigma-proximity (sigma>2), NOT in the low-sigma "
+                f"near-coin-flip corner. A positive `cheap_won - cheap_mid` "
+                f"at high sigma-proximity means the cheap side (the side the "
+                f"spot has already moved AGAINST) wins more often than its "
+                f"price implies -- this is a favourite/longshot mispricing, "
+                f"the SAME effect Task 8's fair-value decomposition isolates "
+                f"as the cheap-side-actually-favoured bin. Task 8 shows it is "
+                f"NOT cost-surviving (negative net of taker, ~0 net of "
+                f"maker), and the divergence backtest -- which targets "
+                f"exactly that signal out-of-fold -- finds it does not "
+                f"generalize to a profitable rule. The 'edge' here is gross, "
+                f"conditioned, and not tradeable."
             )
         else:
             lines.append(
-                "- None of the qualifying cells are specifically the "
-                "low-sigma corner; the surviving edge is broader than the "
-                "narrow panic-overshoot prediction."
+                "- None of the qualifying cells carry a positive, "
+                "cost-relevant edge in the low-sigma corner."
             )
     else:
         lines.append(
@@ -832,19 +848,19 @@ def _verdict(xs, one_dim, sig_drop, qualifying, q1, q2) -> str:
     # --- bottom line ---
     if qualifying:
         bl = (
-            f"**Bottom line.** A conditioned cheap-side buyer edge of "
-            f"~{_fmt_c(overall)} exists in the de-biased cross-section, and "
-            f"{len(qualifying)} cell(s) survive the both-halves dev-internal "
-            f"CV. Whether it concentrates at low sigma-proximity is reported "
-            f"above -- "
-            + ("it DOES, supporting the panic-overshoot thesis."
-               if (np.isfinite(lo_edge) and np.isfinite(hi_edge)
-                   and lo_edge > hi_edge + 0.03)
-               else "it does NOT concentrate sharply near coin-flips, so the "
-                    "panic-overshoot story is at best partial.")
-            + " None of these gross edges are net-of-cost: Task 9 must "
-              "subtract the ~16-21% taker round-trip before any of this is "
-              "tradeable."
+            f"**Bottom line.** On corrected data the overall de-biased "
+            f"cheap-side edge is ~{_fmt_c(overall)} -- essentially zero. "
+            f"{len(qualifying)} conditioned cell(s) clear the both-halves "
+            f"dev-internal CV, but the positive ones sit at HIGH "
+            f"sigma-proximity (sigma>2): they are the favourite/longshot "
+            f"mispricing -- the cheap side being the spot-favoured side -- "
+            f"NOT a low-sigma panic-overshoot edge. These are GROSS, "
+            f"conditioned numbers; Task 8's fair-value decomposition shows "
+            f"the same effect does not survive the ~16-21% taker round-trip "
+            f"cost (and is ~0 net of maker), and the divergence backtest "
+            f"confirms out-of-fold that it does not yield a profitable rule. "
+            f"There is no conditioned cheap-side edge here that is tradeable "
+            f"on correct labels."
         )
     else:
         bl = (
