@@ -10,17 +10,28 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import json
+import os
 import shutil
 import signal
 import time
 
 import structlog
 
+from mean_reversion_live.collectors.chainlink_collector import (
+    DEFAULT_POLYGON_RPC,
+    ChainlinkCsvGzAppender,
+    chainlink_loop,
+)
 from mean_reversion_live.collectors.l2_writer import L2CsvGzAppender
 from mean_reversion_live.collectors.macro_writer import MacroCsvGzAppender
 from mean_reversion_live.collectors.outcome_writer import OutcomeWriter
 from mean_reversion_live.collectors.spot_collector import SpotPriceCache, spot_loop
+from mean_reversion_live.collectors.spot_ws_collector import (
+    CoinbaseSpotWsCollector,
+    SpotCsvGzAppender,
+)
 from mean_reversion_live.collectors.tick_writer import CrashSafeCsvGzAppender
+from mean_reversion_live.collectors.trades_writer import TradesCsvGzAppender
 from mean_reversion_live.collectors.ws_collector import WsCollector
 from mean_reversion_live.config import get_settings
 from mean_reversion_live.engine.paper_engine import PaperEngine
@@ -91,6 +102,16 @@ async def amain() -> None:
     # Additive full-depth (L2) capture — separate stream, does not touch the
     # 23-column tick schema or the decision path. Used for offline research.
     l2_writer = L2CsvGzAppender(settings.data_path / "live_l2")
+    # Additive collector-v2 streams. All three are separate gzip-CSV writers;
+    # none touch the 23-column tick schema, tick_writer, or the decision path.
+    #   Stream 1: executed-trade prints from the CLOB `market` WS channel.
+    #   Stream 2: real-time Coinbase spot via WS ticker channel.
+    #   Stream 3: Chainlink on-chain oracle reads from Polygon.
+    trades_writer = TradesCsvGzAppender(settings.data_path / "live_trades")
+    spot_ws_writer = SpotCsvGzAppender(settings.data_path / "live_spot")
+    chainlink_writer = ChainlinkCsvGzAppender(settings.data_path / "live_chainlink")
+    spot_ws_collector = CoinbaseSpotWsCollector(spot_ws_writer, settings.symbol_list)
+    polygon_rpc_url = os.environ.get("POLYGON_RPC_URL", DEFAULT_POLYGON_RPC)
 
     # Shared queue
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -115,6 +136,7 @@ async def amain() -> None:
         tick_writer=tick_writer,
         out_queue=tick_queue,
         l2_writer=l2_writer,
+        trades_writer=trades_writer,
     )
 
     # Paper engine
@@ -226,6 +248,13 @@ async def amain() -> None:
         asyncio.create_task(heartbeat()),
         asyncio.create_task(disk_watcher()),
         asyncio.create_task(macro_dumper()),
+        # Additive collector-v2 streams (Streams 2 + 3; Stream 1 rides the
+        # existing ws_collector task). Each is best-effort and isolated.
+        asyncio.create_task(spot_ws_collector.run()),
+        asyncio.create_task(
+            chainlink_loop(chainlink_writer, settings.symbol_list, stop,
+                           rpc_url=polygon_rpc_url)
+        ),
     ]
     log.info("combined_running")
 
@@ -233,6 +262,7 @@ async def amain() -> None:
     log.info("combined_stopping")
     discovery.stop()
     ws_collector.stop()
+    spot_ws_collector.stop()
     engine.stop()
     for t in tasks:
         t.cancel()
@@ -244,6 +274,9 @@ async def amain() -> None:
     tick_writer.close()
     macro_writer.close()
     l2_writer.close()
+    trades_writer.close()
+    spot_ws_writer.close()
+    chainlink_writer.close()
     log.info("combined_stopped")
 
 

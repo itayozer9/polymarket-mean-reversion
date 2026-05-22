@@ -19,6 +19,7 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 from mean_reversion_live.collectors.l2_writer import L2CsvGzAppender, book_to_l2_row
 from mean_reversion_live.collectors.spot_collector import SpotPriceCache
 from mean_reversion_live.collectors.tick_writer import CrashSafeCsvGzAppender
+from mean_reversion_live.collectors.trades_writer import TradesCsvGzAppender, parse_trade_event
 from mean_reversion_live.config import get_settings
 from mean_reversion_live.markets.discovery import MarketDiscovery
 from mean_reversion_live.markets import windows as win
@@ -109,12 +110,15 @@ class WsCollector:
         tick_writer: CrashSafeCsvGzAppender,
         out_queue: Optional[asyncio.Queue] = None,
         l2_writer: Optional[L2CsvGzAppender] = None,
+        trades_writer: Optional[TradesCsvGzAppender] = None,
     ):
         self._discovery = discovery
         self._spot = spot_cache
         self._writer = tick_writer
         self._l2_writer = l2_writer  # additive full-depth stream; None disables
+        self._trades_writer = trades_writer  # additive trade-print stream; None disables
         self._out_queue = out_queue  # bounded; paper engine reads here
+        self._trades_seen = 0  # diagnostic counter for the trade-print stream
         self._stop = asyncio.Event()
         self._books: Dict[str, OrderBook] = defaultdict(OrderBook)
         self._desired_subs: Set[str] = set()
@@ -229,12 +233,51 @@ class WsCollector:
         token_id = str(msg.get("asset_id") or msg.get("market") or "")
         if not token_id:
             return
+        if kind in ("last_trade_price", "trade"):
+            # Additive trade-print stream — never let it touch the book/decision
+            # path. Best-effort: any failure is swallowed.
+            self._handle_trade_event(msg)
+            return
         book = self._books[token_id]
         if kind == "book":
             book.apply_book_snapshot(msg)
         elif kind == "price_change":
             book.apply_price_change(msg)
         # ignore other event types
+
+    def _resolve_token(self, token_id: str):
+        """Map a CLOB token id to (market_slug, symbol, outcome).
+
+        outcome is "yes" / "no" / "" depending on which leg of the binary
+        market the token is. Returns ("", "", "") if the token is not in any
+        currently-active market.
+        """
+        for slug, m in self._discovery.active_markets.items():
+            if token_id == m.yes_token_id:
+                return slug, m.symbol, "yes"
+            if token_id == m.no_token_id:
+                return slug, m.symbol, "no"
+        return "", "", ""
+
+    def _handle_trade_event(self, msg: dict) -> None:
+        """Capture an executed-trade print to the additive trades stream."""
+        if self._trades_writer is None:
+            return
+        try:
+            parsed = parse_trade_event(msg)
+            token_id = parsed.get("asset_id") or ""
+            slug, symbol, outcome = self._resolve_token(str(token_id))
+            row = {
+                "timestamp_ms": int(time.time() * 1000),
+                "market_slug": slug,
+                "symbol": symbol,
+                "outcome": outcome,
+                **parsed,
+            }
+            self._trades_writer.append(row)
+            self._trades_seen += 1
+        except Exception as e:
+            log.warning("trade_write_failed", err=str(e))
 
     async def _aggregator(self) -> None:
         """Once per second, emit one CSV row per active market."""
@@ -262,6 +305,7 @@ class WsCollector:
                     rows_written=ticks_seen,
                     active_markets=len(self._discovery.active_markets),
                     books_seen=len(self._books),
+                    trades_seen=self._trades_seen,
                 )
                 ticks_seen = 0
                 last_status_ts = second_ts
