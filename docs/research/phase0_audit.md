@@ -162,6 +162,204 @@ This limitation persists through all later phases. Task 6 (cost realism) must
 note it explicitly, and Phase 5 strategy sizing must treat top-of-book depth as
 a hard cap, not a ceiling to work up to.
 
+## Task 3b — March data encoding forensics
+
+Follow-up audit triggered because Task 3 dismissed the March 15–17 crossed-book
+anomaly as a "benign recording-convention difference." That conclusion does not
+survive scrutiny. A correctly labelled order book *always* has ask ≥ bid; the
+`yes_mid + no_mid ≈ 1` sanity check used in Task 3 cannot detect a bid↔ask swap
+because `(bid+ask)/2` is invariant under the swap. This section settles the
+question with numbers.
+
+Script: `research/audit/march_encoding_probe.py`. Reference regime is May 15–22
+(collected by the current bot — known-good). All percentages below are over
+two-sided ticks (`0 < bid,ask < 1` on both YES and NO) unless stated.
+
+### Headline numbers (YES side; `yes_best_ask − yes_best_bid`)
+
+| Regime    | Sym | TF  | n (ticks) | ask ≥ bid | ask < bid | median(ask−bid) | bid≤0.02 |
+|-----------|-----|-----|-----------|-----------|-----------|-----------------|----------|
+| Mar 04–13 | btc | 5m  |   622 234 |   96.7%   |   3.3%    |  **+0.49**      | 100%     |
+| Mar 04–13 | eth | 5m  |   622 374 |   95.8%   |   4.2%    |  **+0.49**      | 100%     |
+| Mar 14    | btc | 5m  |    12 385 |  100.0%   |   0.0%    |   —             | 100%     |
+| Mar 15    | btc | 15m |     1 126 |   90.7%   |   9.3%    |   small         | 50.7%    |
+| Mar 16–17 | btc | 15m |    36 206 |  **13–15%** | **85–87%** | **−0.16 to −0.19** | 7–13% |
+| Mar 16–17 | eth | 15m |   ~35 800 |  ~14%     | **~86%**  |  **−0.17**      | 7–13%    |
+| Mar 16–17 | sol | 15m |   ~36 900 |  ~16%     | **~84%**  |  **−0.14**      | 8–10%    |
+| Mar 16–17 | xrp | 15m |   ~33 800 |  ~15%     | **~85%**  |  **−0.15**      | 9–12%    |
+| May 15–22 | all | both|  ~496k ea |  96–98%   |   2–4%    |  **+0.01**      | ~0%      |
+
+The NO side mirrors the YES side exactly in every regime (`yes_best_bid +
+no_best_ask = 1` and `yes_best_ask + no_best_bid = 1` hold in 92–97% of ticks
+in *both* March 16–17 and May — same convention). The NO columns carry no
+independent information; the anomaly is entirely about the YES bid/ask labels.
+
+### Three distinct March regimes — not one
+
+**Regime A — Mar 04–14 (5m only): degenerate bid column. Tag: CONCERN.**
+`yes_best_bid` is pinned at `0.01` in **95.8%** of rows and `0.00` in 3.7%
+(btc; identical 100% bid≤0.02 for all 4 symbols, every day Mar 04–14). Out of
+622 234 btc 5m ticks, exactly **one** has both bid and ask in a normal
+(0.02, 0.98) range. This is not a "thin one-sided book" that happens to be
+real — it is a column that never carries a usable quote. The YES bid side is
+effectively absent for this regime. Task 3's claim that this is "genuine market
+state, not corruption" is unprovable either way, but the operational fact is
+the same: **there is no usable bid price for Mar 04–14, so no round-trip trade
+can be priced from this data.** 15m markets do not exist before Mar 15.
+
+**Regime B — Mar 15 (15m + 5m): transitional, mostly OK. Tag: OK (small n).**
+Collection started mid-day (Task 3 noted this); only ~1 100 ticks/day. About
+30–50% still show the 0.01 bid floor, but among genuine two-sided ticks
+`ask ≥ bid` holds 73–97%. Mar 15 looks like the changeover day.
+
+**Regime C — Mar 16–17 (15m + 5m): broken book. Tag: BUG.**
+`yes_best_ask < yes_best_bid` in **83–88%** of two-sided ticks across all 4
+symbols and both timeframes. `spread_yes` is literally `ask − bid` (verified
+100% in every regime — see below) and is therefore **negative** in 76–83% of
+15m ticks. The book is internally "consistent" only in the trivial sense that
+`spread_yes` faithfully reports a negative spread. A market book with a
+persistently negative spread is not a real book.
+
+### What `spread_yes` / `spread_no` / `total_mid` actually are
+
+- `spread_yes == yes_best_ask − yes_best_bid` (signed) in **100.0%** of ticks
+  in *every* regime — Mar 04–13, Mar 16–17, May. It is the raw signed
+  difference, not `|ask − bid|`. In May it is positive (+0.01 median); in
+  Mar 16–17 it is negative (−0.14 median, 15m). `spread_no` is likewise
+  `no_best_ask − no_best_bid`, 100% match. **A negative `spread_yes` is the
+  cleanest single tell that the March 16–17 book is mis-encoded.**
+- `total_mid == yes_mid + no_mid` in 100% of ticks everywhere. As predicted,
+  `total_mid ≈ 1.0` is preserved on the broken data because the mid is
+  swap-invariant — it is worthless as a corruption check.
+
+### Is it a clean bid↔ask swap? No.
+
+Hypothesis: swapping `yes_best_bid ↔ yes_best_ask` (and `no_best_bid ↔
+no_best_ask`) on Mar 16–17 would restore a sane book. **It does not.**
+
+- After the swap, `ask ≥ bid` holds in only **85–88%** of Mar 16–17 15m
+  two-sided ticks (btc 88.5%, eth 88.5%, sol 85.7%, xrp 85.7%), not ~100%.
+  The residual ~12% are rows that were *already correctly encoded*
+  (`bid < ask`, spread +0.01, indistinguishable from May) — the swap *breaks*
+  them. Mar 16–17 is a **mixture** of correctly-encoded and broken ticks,
+  ~85/15, intermixed within the same windows (mean ≈ 5 crossed↔normal flips
+  per 15m window; crossed-rate is roughly flat ~77–89% across all ten 90-second
+  buckets of the window — no clean temporal split).
+- Even on the rows the swap "fixes," the resulting spread is insane: post-swap
+  median spread is **0.21–0.22** for all four symbols — **~22× wider than
+  May's 0.01**. Real top-of-book spreads on these markets are 1–3¢. A swap
+  that yields a 22¢ spread has not recovered a real book; it has just flipped
+  the sign of a number that was never a spread.
+- Inspecting individual Mar 16 windows tick-by-tick: one column per side sits
+  at a sticky level for long stretches (e.g. `yes_best_bid` frozen at 0.54 for
+  ~250 s) while the other column moves monotonically with `move_pct`. Both
+  columns are ~93% stale window-over-window in aggregate, and both correlate
+  with `move_pct` at ~0.59–0.61 (vs ~0.28–0.36 in May) — i.e. neither column is
+  a clean "truth" column and neither is clean garbage. The two columns are not
+  a mislabeled (bid, ask) pair; they are two loosely-related price series whose
+  difference is meaningless.
+
+**Conclusion on the mechanism:** Mar 16–17 is *broken*, not *swapped*. The
+recording on those two days produced a YES bid/ask pair that is neither a valid
+book nor a recoverable swap of one. A blanket column swap would mislabel ~15%
+of ticks the wrong way and still leave a 22¢ pseudo-spread. The data cannot be
+normalised by any column permutation.
+
+### Depth scale — Tag: CONCERN, unresolved
+
+March top-of-book depths are 100–1000× May's:
+
+| Regime    | median `yes_ask_depth` (btc) |
+|-----------|------------------------------|
+| Mar 04–13 5m   | ~38 600 |
+| Mar 16–17 15m  | ~34 600 |
+| May 15–22 15m  | ~132    |
+| May 15–22 5m   | ~138    |
+
+Tells examined: (a) `yes_bid_depth == no_ask_depth` in 96–99% of ticks in
+*every* regime — the depth columns mirror the same complement convention as
+prices, so the unit is at least internally consistent across March and May;
+(b) March depths are not round numbers (e.g. 22 280.82, 14 923.82) — they look
+like summed dollar quantities, not a count; (c) March depth does not collapse
+to May's range under any obvious /100 or /1000 factor that also makes sense of
+the prices. The most likely readings are either a **genuine liquidity-regime
+difference** (March markets were quoted with large walls) or a
+**cumulative-vs-top-of-book** difference (March depth = full-book USD, May
+depth = best level only). The data alone cannot distinguish these. Either way:
+**March depth is NOT comparable to May depth and must not be fed to the same
+fill model.** Any backtest that sized fills against March depth (≈$35k of
+"liquidity") would assume effectively unlimited capacity.
+
+### Backtest impact — Tag: BUG (critical)
+
+`BACKTEST_VERDICT.md` Stage A — the headline 1000-config Latin-Hypercube sweep
+— ran on **BTC 15m, Mar 15–17** (`sweep_15m_btc_2026-03-15_to_2026-03-17_
+n1000_20260515_054915.jsonl`). That window is ~95% Regime C (broken) data.
+
+The simulator (`polymarket-arb/scripts/mean_reversion/simulate.py`) buys at
+`yes_best_ask` (`_try_fill_entry` → `_side_price`, line ~188) and marks/sells
+the exit at `yes_best_bid` (line 118, "peak_bid = the achievable sell price").
+On Mar 16–17 BTC 15m, `yes_best_bid` exceeds `yes_best_ask` in **86%** of
+two-sided ticks by a **median of 0.22** (mean 0.235, p90 0.42).
+
+So on the great majority of Mar 16–17 ticks the simulator **buys at the lower
+number and sells at the higher number** — a structural, mechanical profit on
+every round trip, before any signal skill. The magnitude:
+
+- Per-share free edge ≈ **0.22** (median) on a crossed tick.
+- On a $10 bet that is **≈ $2.2 of fake PnL per trade** handed to the backtest
+  purely by the encoding.
+- Per-window mean inverted spread ≈ 0.18–0.21 across the 58 BTC 15m windows in
+  the sample.
+- For the validated deep-dip config (`cfg_21c8c00165b3`, buys YES at
+  0.075–0.125), the entry uses the *low* column; an entry near 0.10 with the
+  exit-side bid sitting ~0.22 higher is an instant ~200%-of-notional paper
+  gain. This is almost certainly the dominant source of the 88–93% backtest win
+  rates in `BACKTEST_VERDICT.md`, and the direct explanation for why live
+  trading lost.
+
+### VERDICT
+
+| Regime    | Bid/ask encoding              | Depth scale        | Verdict |
+|-----------|-------------------------------|--------------------|---------|
+| Mar 04–14 | `yes_best_bid` degenerate (pinned 0.01); no usable bid | ~100–1000× May, not comparable | **BROKEN — unusable for round-trip pricing** |
+| Mar 15    | OK among two-sided ticks; transitional, tiny n | as above | OK but negligible volume |
+| Mar 16–17 | **BROKEN** — 83–88% negative spread; not a clean swap; ~15% of ticks intermixed-correct | not comparable | **BROKEN — not recoverable** |
+| May 15–22 | Correct (`ask ≥ bid` 96–98%, +0.01 spread) | the reference | **OK** |
+
+- **BUG:** The `BACKTEST_VERDICT.md` Stage A sweep ran on Mar 15–17 BTC 15m,
+  ~95% of which is broken Regime C data. With the simulator buying at `ask` and
+  selling at `bid`, ~86% of ticks handed it a median **$2.2-per-$10-trade**
+  mechanical edge. **The headline backtest edge is an encoding artifact, not a
+  real strategy edge.** `BACKTEST_VERDICT.md` should be treated as invalid.
+- **CONCERN:** March depth is 100–1000× May and cannot be unit-reconciled from
+  the data alone — exclude it from any shared fill model.
+- Task 3's "benign recording-convention difference" conclusion is **wrong** and
+  is hereby superseded.
+
+### RECOMMENDATION
+
+1. **Quarantine all March 16–17 data** (`{btc,eth,sol,xrp}_2026-03-16.csv.gz`,
+   `..._2026-03-17.csv.gz`). It cannot be normalised: it is not a swap (a swap
+   leaves 15% mislabeled and a 22¢ pseudo-spread), and there is no column
+   permutation that yields a May-consistent book. Do not feed it to any
+   backtest. Do not "fix" it by swapping.
+2. **Quarantine Mar 04–14 for any logic that needs a bid price** (i.e. all
+   round-trip / mean-reversion strategies). `yes_best_bid` is pinned at the 0.01
+   floor; exits cannot be priced. The `yes_best_ask` series may still be usable
+   for ask-only / entry-only research, but treat with suspicion.
+3. **Keep Mar 15** only if a strategy can tolerate ~1 100 ticks; it is
+   effectively negligible.
+4. **Re-run the entire validation sweep on May 15–22 data only** — that is the
+   only regime with a verified-correct book. `BACKTEST_VERDICT.md`'s
+   Bonferroni claim must be re-established (or discarded) on May data alone.
+5. **Do not normalise — exclude.** Add a hard date filter to the research
+   loaders: only `2026-03-15` (optional) and `2026-05-15`..present are
+   admissible for backtests that price round trips. (Investigation only — the
+   loader was NOT modified as part of this task.)
+6. If March-era data is ever needed, it must be re-pulled from source with the
+   current collector's encoding, not salvaged from these files.
+
 ## Task 4 — Outcome correctness
 _pending_
 
