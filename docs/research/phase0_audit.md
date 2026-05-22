@@ -491,7 +491,85 @@ is outperforming the 53% Down base rate by only 2 percentage points — marginal
 | P(Up) base rates | 0.47–0.50 across all symbols/timeframes |
 
 ## Task 5 — Proximity filter bug
-_pending_
+
+Script: `research/audit/proximity_bug.py`. Run via `uv run python -m research.audit.proximity_bug`.
+
+**BUG: The proximity filter in `polymarket-arb` is permanently inert for all
+realistic market configurations.**
+
+### Mechanism
+
+`polymarket-arb/scripts/mean_reversion/features.py::proximity_pct_from_move`
+computes:
+
+```python
+return np.abs(move_pct).astype("f4") / 100.0
+```
+
+It returns `|move_pct| / 100` — a unitless fraction (e.g. a 1.5% move yields
+`0.015`).
+
+`polymarket-arb/scripts/mean_reversion/signals.py::entry_signal` then applies:
+
+```python
+if features.proximity > entry.proximity_max_pct:
+    return None  # reject tick — too far from strike
+```
+
+`proximity_max_pct` is configured in percent (e.g. `0.5` meaning "reject if spot
+is more than 0.5% from the strike"). But `features.proximity` is in fraction
+units (`0.005` for a 0.5% move). The comparison is always
+`0.005 > 0.5` → `False` — the filter never fires.
+
+### Reproduction numbers
+
+Sampled 515 real BTC 15m windows from May 15–21 (May-only because March data is
+quarantined by default; the proximity feature is equally inert regardless of
+regime). Console output:
+
+```
+windows sampled: 515
+largest |move_pct| observed: 1.4268%
+feature 'proximity' at that extreme: 0.014268
+  proximity_max_pct=0.2: filter ever rejects? False
+  proximity_max_pct=0.5: filter ever rejects? False
+  proximity_max_pct=1.5: filter ever rejects? False
+  proximity_max_pct=3.0: filter ever rejects? False
+  proximity_max_pct=100.0: filter ever rejects? False
+VERDICT: proximity filter is inert for all realistic configs
+```
+
+The largest `|move_pct|` observed is 1.43%, which maps to a `proximity` value of
+`0.01427`. Even the loosest threshold `proximity_max_pct=3.0` would require
+`proximity > 3.0` to fire — which would require `|move_pct| > 300%`, an
+impossible spot price move within a 15-minute window. The filter is inert at
+every threshold that appears in any real config.
+
+Note: the script caps at 2000 windows for speed; only 515 May windows exist in
+the data by the time of this audit. On March data (if re-enabled with
+`include_quarantined=True`), the conclusion is identical — March 15m `|move_pct|`
+is also within ±5%, giving `proximity ≤ 0.05`, still far below any realistic
+threshold.
+
+### Implication
+
+Every backtest and every live config ran with **no effective proximity filter**.
+The user's core "near the strike" rule — that strategies should only enter when
+the odds dip occurs while spot is close to the strike (not decisively above/below)
+— was **never tested** in any backtest or paper run. The 88–93% win rates in
+`BACKTEST_VERDICT.md` (already invalidated by Task 3b for other reasons) were
+achieved on a config space where the proximity guard was silently disabled.
+
+### Fix (Phase 1)
+
+The broken arb function is left **untouched** — changing it would break the live
+bot's replay-parity test (`tests/test_paper_engine_replay.py`) and is out of scope
+for Phase 0. The canonical research dataset (Phase 1, Task 10) will carry a
+**corrected proximity column in percent** (`|move_pct|`, computed by
+`research.features.core.corrected_proximity_pct`), and a σ-proximity feature
+(`sigma_proximity`) that normalises by remaining vol. All Phase 2+ strategy
+research must use these corrected features, not the arb `proximity_pct_from_move`
+function.
 
 ## Task 6 — Fee & cost realism
 _pending_
