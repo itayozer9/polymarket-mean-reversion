@@ -147,3 +147,45 @@ pure data collector; the `research/` pipeline is re-runnable on future data.
 
 **Open door:** the user's real manual trade records were never available — the
 one remaining way to test whether the manual edge was real. See FINAL_REPORT §4, §7.
+
+---
+
+## 2026-05-22 — Leaderboard wallet analysis (branch `leaderboard-wallet-analysis`)
+
+Owner asked: do the robust wallets on Polymarket's crypto profit leaderboard
+profit from market-making, and can we replicate it?
+**Full write-up: `docs/research/leaderboard_mm_verdict.md`.**
+
+**Outcome: the market-making hypothesis is refuted; the dominant winning pattern
+has no replicable edge.**
+
+What happened:
+- Built a data pipeline and pulled **239 leaderboard wallets** (union of top 100
+  of the MONTH/WEEK/ALL crypto boards), fetched each wallet's on-chain activity,
+  and classified by archetype. Result: **167 (70%) `directional_holder`** (buy a
+  side, hold to resolution), 27 `mint_merge_arbitrageur`, 10 scalpers, **1**
+  true `passive_liquidity_provider`, 34 mixed/non-crypto.
+- **MM hypothesis refuted, doubly confirmed.** The prior `market_making_feasibility.md`
+  said NO-GO from crude economics (spread ~1c vs adverse selection ~2.25c). The
+  wallet evidence confirms it independently: if MM were profitable the
+  leaderboard would be full of market-makers — it is 1 of 239.
+- **The directional pattern is survivorship, not edge.** Backtested the dominant
+  pattern (rule M15-DH-1: buy favourite early, hold to resolution) on tick data
+  that includes the losers: 15m taker −$0.26/trade (CI straddles 0), 5m taker
+  −$0.55/trade (CI negative), maker variants straddle 0 or negative. Nothing
+  CI-positive on DEV; sealed hold-out stayed sealed. The favourite side is
+  well-calibrated. This is the **4th independent confirmation** the short-dated
+  market is efficient-after-cost.
+- **Data bug found:** `data/research/ticks_5m.parquet`'s baked-in `outcome_up` is
+  ~31% corrupt (1,564 of 5,018 windows); the backtest used corrected 5m labels.
+  Future 5m work must do the same. 15m labels are authoritative.
+
+**The one open lead:** the `mint_merge_arbitrageur` cluster (27 wallets, several
+with $0.5M–$1.6M lifetime PnL) is the only genuinely non-directional, persistent
+pattern — but it lives in **longer-dated crypto price-target markets** (not 15m
+Up/Down), is completely untested by us, and pursuing it would be a new research
+project (new data collector, new study). Presented as a decision for the owner.
+
+**Recommendation:** NO-GO on market-making and NO-GO on directional strategies
+for 5m/15m crypto Up/Down. No edge for a small patient bot in the markets
+studied. See `docs/research/leaderboard_mm_verdict.md` §7.
