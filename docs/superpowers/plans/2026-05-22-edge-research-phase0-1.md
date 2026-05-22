@@ -26,6 +26,14 @@ together" signal) is also deferred to the Phase 2–4 plan as an analysis input 
 `data/live_macro/` already supplies it for May and the March equivalent is cheap
 to build there.
 
+**DATA SCOPE (revised 2026-05-22 after Task 3b).** March tick data is
+**quarantined** — its order book is corrupt (Mar 16–17: bid > ask in 83–88% of
+ticks; Mar 4–14: bid pinned at 0.01). Only **May 15 onward** is correctly
+encoded. Every Phase 1 dataset build and Phase 2+ analysis uses May-only; the
+loader (Task 3c) enforces this by default. Audit Tasks 3–8 may scan all data
+(auditing is the point) but weight conclusions to May. See
+`docs/research/phase0_audit.md` Task 3b.
+
 **Reference facts established by reading the codebase (do not re-derive):**
 - Tick CSVs: 23 columns. Header order: `timestamp_ms, market_slug, symbol,
   window_start_ts, window_end_ts, seconds_into_window, yes_best_bid, yes_best_ask,
@@ -395,6 +403,65 @@ git commit -m "research: tick data quality audit (Phase 0 Task 3)"
 
 ---
 
+## Task 3c: Quarantine March data in the research loader
+
+**Files:**
+- Modify: `research/data/loader.py`
+- Modify: `tests/research/test_loader.py`
+
+Phase 0 Task 3b found the March tick data has a corrupt order book. The loader
+must default to the trustworthy May-onward range so no later task can build on
+broken data.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/research/test_loader.py`:
+
+```python
+from research.data.loader import list_tick_files, QUARANTINE_BEFORE
+
+def test_list_tick_files_quarantines_march_by_default():
+    files = list_tick_files("btc", "2026-03-01", "2026-05-22")
+    assert all("2026-03" not in f for f in files), "March files must be quarantined"
+    assert any("2026-05" in f for f in files), "May files must be present"
+
+def test_list_tick_files_include_quarantined_opt_in():
+    files = list_tick_files("btc", "2026-03-01", "2026-05-22", include_quarantined=True)
+    assert any("2026-03" in f for f in files), "opt-in must include March"
+    assert QUARANTINE_BEFORE == "2026-05-15"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/research/test_loader.py -q`
+Expected: FAIL — `QUARANTINE_BEFORE` / the new parameter do not exist.
+
+- [ ] **Step 3: Implement the quarantine**
+
+In `research/data/loader.py`:
+- Add a module constant near the top:
+  `QUARANTINE_BEFORE = "2026-05-15"  # Task 3b: March tick data has a corrupt order book — unusable.`
+- Add `include_quarantined: bool = False` as the last parameter of
+  `list_tick_files`. When it is `False`, after computing each file's date,
+  skip any file whose `_file_date` is `< QUARANTINE_BEFORE` (string compare on
+  ISO dates is correct).
+- Add the same `include_quarantined: bool = False` parameter to `iter_windows`
+  and pass it straight through to `list_tick_files`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `uv run pytest tests/research/test_loader.py -q`
+Expected: PASS — the two new tests plus the existing loader test.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add research/data/loader.py tests/research/test_loader.py
+git commit -m "research: quarantine March data in the loader (Task 3b follow-up)"
+```
+
+---
+
 ## Task 4: Outcome correctness audit
 
 **Files:**
@@ -665,13 +732,17 @@ git commit -m "research: sim vs live-paper reconciliation (Phase 0 Task 8)"
 """Sealed hold-out boundary. Phase 2+ analyses MUST exclude these dates from
 all fitting and selection. Opened exactly once, at the end of Phase 6.
 
+March is quarantined (Task 3b) — only May data is admissible. With ~8 clean
+days the hold-out is necessarily small; it is re-sealed larger on every weekly
+re-run as the bot collects more data.
+
 Recommended split (confirm with user at the Phase 0 checkpoint):
-- DEVELOPMENT: 2026-03-04 .. 2026-05-17  (March regime + first 3 live days)
-- SEALED HOLD-OUT: 2026-05-18 .. 2026-05-22  (final 5 live days)
+- DEVELOPMENT: 2026-05-15 .. 2026-05-20
+- SEALED HOLD-OUT: 2026-05-21 .. 2026-05-22
 """
-DEV_START = "2026-03-04"
-DEV_END = "2026-05-17"
-HOLDOUT_START = "2026-05-18"
+DEV_START = "2026-05-15"
+DEV_END = "2026-05-20"
+HOLDOUT_START = "2026-05-21"
 HOLDOUT_END = "2026-05-22"
 
 def is_holdout(date_str: str) -> bool:
@@ -1186,7 +1257,8 @@ git commit -m "research: tick-level canonical table builder with features"
 - [ ] **Step 1: Implement the build entrypoint**
 
 `research/build_dataset.py` — for every symbol in `[btc, eth, sol, xrp]` and
-every timeframe in `[15m, 5m]`, over `2026-03-04`..`2026-05-22`:
+every timeframe in `[15m, 5m]`, over `2026-05-15`..`2026-05-22` (March is
+quarantined — the loader excludes it by default; do not pass `include_quarantined`):
 - build the window table (Task 12) and concat → `data/research/windows.parquet`;
 - build per-window tick tables (Task 13), concat per timeframe →
   `data/research/ticks_15m.parquet`, `data/research/ticks_5m.parquet`;

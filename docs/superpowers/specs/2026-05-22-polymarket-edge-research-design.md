@@ -4,7 +4,8 @@
 **Status:** Approved — Phase 0–1 plan written; revised 2026-05-22 after a critical
 self-review (added: resolution-oracle check, lead–lag study, edge-map dev-internal
 CV, feature-importance diagnostic, σ-proximity disaster exit, top-of-book data
-limitation, regime-gap honesty)
+limitation, regime-gap honesty). Phase 0 in progress — found the March tick data
+is corrupt (Task 3b); data scope cut to May-only (~8 days, growing).
 **Approach:** A (Physics-first), fresh start, no commitment to existing strategies
 
 ---
@@ -26,6 +27,17 @@ When a process produces ~20 candidates and all 20 fail, the parameters are not t
 problem — the **method** is.
 
 ### Diagnosis of the old method
+
+**Primary cause — the backtest ran on corrupted data** (found in Phase 0,
+2026-05-22; see `docs/research/phase0_audit.md` Task 3b). The March 16–17 tick
+data the headline 1000-config sweep was built on has a broken order book: the
+recorded **bid sits above the ask in 83–88% of ticks** (median 0.22). The
+simulator buys at the ask and sells at the bid, so it mechanically bought low and
+sold high — ≈$2 per $10 trade, up to ~200% of notional on deep-dip entries — of
+fake PnL *before any signal logic ran*. This alone explains the 88–93% backtest
+win rates. `BACKTEST_VERDICT.md` is invalid. The methodology flaws below are all
+real, but **secondary** — they amplified a backtest that was already fake at the
+data level.
 
 1. **Overfitting machine.** Sweep 1000 configs → pick top → "validated" → loses →
    sweep 3000 more → pick top → "GOLD" → loses. Each round fits noise harder.
@@ -88,19 +100,21 @@ hold-out, where it was never tuned.
 
 ## 2. Data inventory
 
-- **Historical (March):** Mar 4–17 2026, ~14 days. BTC/ETH/SOL/XRP, 5m + 15m
-  markets. 23-column 1Hz tick CSVs. `outcomes.csv`. Binance spot 5m candles (180d).
-- **Live (May):** May 15–22 2026, ~8 days. Same 23-col ticks, plus `live_macro/`
-  cross-symbol snapshots, a ~1GB `signals.jsonl` decision-funnel log, per-strategy
-  `trades.jsonl`.
-- **Total ~22 days across two regimes** (March "friendly", May "shallower bounces"),
-  separated by an ~8-week collection gap (no data Mar 18 – May 14) — two regimes is
-  an asset for robustness testing, but they are two samples, not one series.
+- **Live (May) — the only trustworthy data.** May 15–22 2026, ~8 days, BTC/ETH/
+  SOL/XRP, 5m + 15m, 23-column 1Hz tick CSVs, correctly encoded (Phase 0 verified:
+  96–98% ask ≥ bid, clean spreads). Plus `live_macro/` cross-symbol snapshots, a
+  ~1 GB `signals.jsonl` decision-funnel log, per-strategy `trades.jsonl`,
+  `outcomes.csv`. The bot keeps running — this dataset grows ~1 day/day.
+- **Historical (March) — QUARANTINED.** Mar 4–17 tick data has a corrupt order
+  book (Phase 0 Task 3b): Mar 16–17 records bid > ask in 83–88% of ticks; Mar
+  4–14 has the bid pinned at 0.01 (no usable sell side). Unusable for pricing,
+  calibration, or fill analysis. Excluded from all dataset building and analysis.
+- **Working sample: ~8 days, one regime, growing.** Small — the plan runs a full
+  first pass now and re-runs as the bot accumulates clean data. Every conclusion
+  is stated with sample-size honesty; tight CIs require the later re-runs.
 
-Tick schema carries everything needed: top-of-book bid/ask + depth for yes & no,
-`chainlink_price` / `coinbase_price` (spot), `start_price` (strike), `move_pct`,
-mids, spreads. **Proximity to strike and a corrected spread-based fill model are
-fully reconstructable from the data.**
+Tick schema (May): top-of-book bid/ask + depth for yes & no, `chainlink_price` /
+`coinbase_price` (spot), `start_price` (strike), `move_pct`, mids, spreads.
 
 ---
 
@@ -142,7 +156,9 @@ If any of these fails, every later number is fiction.
 
 ### Phase 1 — Canonical research dataset
 
-One clean, reproducible per-window dataset spanning all 22 days. For every window:
+One clean, reproducible per-window dataset over the trustworthy data (May 15
+onward; March quarantined — see §2), re-runnable as the bot collects more. For
+every window:
 every tick with implied prob (mid and bid/ask), spot, strike, time-left, book
 depth/spread, underlying realized vol, and the final outcome. Derived features:
 
@@ -182,8 +198,10 @@ probability — and where is it wrong?
   edge must be selling the bounce *before* resolution. This decides which strategies
   are even possible.
 - **Net-of-cost calibration.** Repeat using ask-to-enter / bid-to-exit.
-- **Regime stability.** Compute the edge map separately for March and May and
-  overlay. An edge present in *both* regimes is real; March-only is the old trap.
+- **Time-split stability.** March is quarantined, so there is only one regime;
+  stability is tested *within* May — compute the edge map on an earlier vs a later
+  split of the available days, and re-compute on every weekly re-run as data
+  grows. An edge that does not persist across the splits is not real.
 - **Cheap-side framing.** YES and NO sum to 1 — the same window-moment seen twice.
   The calibration is framed as *the side a dip-buyer would take* (the cheap side),
   so an edge is never double-counted. The reliability curve is also computed
