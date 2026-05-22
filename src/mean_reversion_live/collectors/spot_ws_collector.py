@@ -252,6 +252,7 @@ class CoinbaseSpotWsCollector:
     async def _floor_writer(self) -> None:
         """Guarantee at least one row per symbol per `min_interval`, even when
         Coinbase sends no fresh ticker (quiet market)."""
+        ticks = 0
         while not self._stop.is_set():
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._min_interval)
@@ -264,6 +265,12 @@ class CoinbaseSpotWsCollector:
                 last = self._last_write_ms.get(symbol, 0)
                 if now_ms - last >= self._min_interval * 1000:
                     self._write_row(symbol, row, now_ms)
+            ticks += 1
+            # Periodic liveness log so the stream is observably alive.
+            if ticks <= 2 or ticks % 60 == 0:
+                log.info("spot_ws_status", floor_ticks=ticks,
+                         rows_written=self._rows_written,
+                         symbols_seen=len(self._latest))
 
     def _write_row(self, symbol: str, row: Dict[str, object], now_ms: int) -> None:
         try:

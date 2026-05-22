@@ -119,7 +119,7 @@ def decode_latest_round_data(hex_result: str) -> Optional[Dict[str, int]]:
 class ChainlinkCsvGzAppender:
     """Per-symbol-per-date gzip CSV appender for Chainlink oracle reads."""
 
-    def __init__(self, base_dir: Path, fsync_every_n_rows: int = 10):
+    def __init__(self, base_dir: Path, fsync_every_n_rows: int = 4):
         self._base = base_dir
         self._base.mkdir(parents=True, exist_ok=True)
         self._files: Dict[tuple, gzip.GzipFile] = {}
@@ -219,9 +219,11 @@ async def chainlink_loop(
     timeout = aiohttp.ClientTimeout(total=20)
     rows_ok = 0
     rows_err = 0
+    cycles = 0
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while not stop_event.is_set():
             t0 = time.time()
+            cycles += 1
             for symbol, addr in feeds.items():
                 if stop_event.is_set():
                     break
@@ -256,8 +258,11 @@ async def chainlink_loop(
                     await asyncio.wait_for(stop_event.wait(), timeout=0.2)
                 except asyncio.TimeoutError:
                     pass
-            if rows_ok + rows_err >= 40:
-                log.info("chainlink_status", rows_ok=rows_ok, rows_err=rows_err)
+            # Log a status line periodically so the stream is observably alive
+            # even at its low write volume.
+            if cycles <= 2 or cycles % 20 == 0:
+                log.info("chainlink_status", cycle=cycles,
+                         rows_ok=rows_ok, rows_err=rows_err)
                 rows_ok = 0
                 rows_err = 0
             elapsed = time.time() - t0
