@@ -71,21 +71,41 @@ class MarketDiscovery:
         markets = await gamma.list_active_markets(session, symbols, timeframes=self._timeframes)
         now_active: Dict[str, gamma.MarketInfo] = {m.slug: m for m in markets}
 
-        # 2) backfill start_price for markets we don't have one for yet
+        # 2) capture start_price (the resolution strike) for each market.
+        #
+        # The strike is the spot price at `window_start_ts` — when the window
+        # actually opens. Discovery probes slugs up to k=+2 slots EARLY
+        # (~30 min ahead for 15m) so the order book can be warmed up before
+        # the window opens; capturing the strike at first sight would freeze
+        # `start_price` at the spot ~30 min too early (Task 8c forensic bug).
+        #
+        # Gamma's market doc does NOT expose the numeric strike anywhere
+        # (verified: no field, not in `description`/`question`/event). The
+        # resolution oracle is Chainlink; Coinbase spot tracks it closely
+        # (Task 4: 94.69% outcome agreement). So we sample `coinbase.get_spot()`
+        # at/after `window_start_ts`, NOT on early discovery.
         for slug, m in now_active.items():
-            if self._active.get(slug) is not None:
-                # already known — preserve previous start_price
-                m_known = self._active[slug]
-                if m_known.start_price > 0:
-                    m = gamma.MarketInfo(**{**m.__dict__, "start_price": m_known.start_price})
-                    now_active[slug] = m
-            if m.start_price <= 0:
-                # Try Coinbase first (very cheap)
+            m_known = self._active.get(slug)
+            if m_known is not None and m_known.start_price > 0:
+                # Strike already captured — preserve it. Never re-sample.
+                m = gamma.MarketInfo(**{**m.__dict__, "start_price": m_known.start_price})
+                now_active[slug] = m
+                continue
+            if m.start_price <= 0 and now >= m.window_start_ts:
+                # Window is open: NOW is the correct time to freeze the strike.
                 sp = await coinbase.get_spot(session, m.symbol)
                 if sp is None or sp <= 0:
                     sp = 0.0
+                if sp > 0:
+                    log.info(
+                        "strike_captured",
+                        slug=slug,
+                        start_price=sp,
+                        seconds_into_window=now - m.window_start_ts,
+                    )
                 m = gamma.MarketInfo(**{**m.__dict__, "start_price": sp})
                 now_active[slug] = m
+            # else: future window (k>0) — leave start_price=0.0 until it opens.
 
         # 3) detect closes (slugs that disappeared OR whose window_end_ts < now)
         closed = []
