@@ -36,3 +36,37 @@ def test_sigma_proximity_large_when_little_time():
     out = sigma_proximity(mp, vol_per_sec, time_left)
     # sigma_remaining = 0.05*2 = 0.1% -> 0.5/0.1 = 5 sigma (decided)
     assert np.allclose(out, 5.0, atol=1e-6)
+
+from research.features.core import (
+    rolling_drop_pct, odds_velocity, book_imbalance, spot_move_pct,
+)
+
+def test_rolling_drop_pct_detects_drop():
+    # mid rises to 0.40 then falls to 0.20 -> 50% drop from window peak
+    mid = np.array([0.30, 0.40, 0.35, 0.20], dtype="f8")
+    out = rolling_drop_pct(mid, window_sec=10)
+    assert np.isclose(out[-1], 50.0, atol=1e-6)
+    assert out[0] == 0.0
+
+def test_odds_velocity_sign():
+    mid = np.array([0.30, 0.28, 0.25, 0.25], dtype="f8")
+    out = odds_velocity(mid, window_sec=2)
+    assert out[2] < 0.0   # falling
+    assert out[0] == 0.0
+
+def test_book_imbalance_bounds():
+    bid = np.array([100.0, 0.0, 50.0], dtype="f8")
+    ask = np.array([100.0, 0.0, 0.0], dtype="f8")
+    out = book_imbalance(bid, ask)
+    assert np.isclose(out[0], 0.5)
+    assert np.isclose(out[1], 0.5)   # both zero -> neutral
+    assert np.isclose(out[2], 1.0)
+
+def test_spot_move_pct_signed_change():
+    # move_pct is the spot's signed distance from strike, in percent.
+    # spot_move_pct is the change in that over the trailing window.
+    mp = np.array([0.00, 0.10, 0.30, 0.25], dtype="f8")
+    out = spot_move_pct(mp, window_sec=2)
+    assert out[0] == 0.0
+    assert np.isclose(out[2], 0.30)   # spot moved +0.30% over 2 ticks
+    assert np.isclose(out[3], 0.15)   # 0.25 - 0.10

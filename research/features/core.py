@@ -56,3 +56,60 @@ def sigma_proximity(move_pct: np.ndarray, vol_per_sec: np.ndarray,
     mask = sigma_remaining > 0
     out[mask] = mp[mask] / sigma_remaining[mask]
     return out
+
+
+def rolling_drop_pct(mid: np.ndarray, window_sec: int) -> np.ndarray:
+    """Percent drop from the trailing-window peak of `mid` to the current value.
+
+    out[i] = (max(mid[i-window_sec:i+1]) - mid[i]) / max(...) * 100, in [0,100].
+    0.0 where no history or peak is 0.
+    """
+    m = np.asarray(mid, dtype="f8")
+    n = len(m)
+    out = np.zeros(n, dtype="f8")
+    for i in range(n):
+        lo = max(0, i - window_sec)
+        peak = m[lo:i + 1].max()
+        if peak > 0:
+            out[i] = (peak - m[i]) / peak * 100.0
+    return out
+
+
+def odds_velocity(mid: np.ndarray, window_sec: int) -> np.ndarray:
+    """Change in `mid` over the trailing `window_sec` ticks (signed, per window).
+
+    out[i] = mid[i] - mid[i-window_sec]; 0.0 for the first `window_sec` ticks.
+    """
+    m = np.asarray(mid, dtype="f8")
+    n = len(m)
+    out = np.zeros(n, dtype="f8")
+    for i in range(window_sec, n):
+        out[i] = m[i] - m[i - window_sec]
+    return out
+
+
+def book_imbalance(bid_depth: np.ndarray, ask_depth: np.ndarray) -> np.ndarray:
+    """bid / (bid + ask) per tick, in [0,1]. 0.5 when both sides are 0."""
+    b = np.asarray(bid_depth, dtype="f8")
+    a = np.asarray(ask_depth, dtype="f8")
+    total = b + a
+    out = np.full(len(b), 0.5, dtype="f8")
+    mask = total > 0
+    out[mask] = b[mask] / total[mask]
+    return out
+
+
+def spot_move_pct(move_pct: np.ndarray, window_sec: int) -> np.ndarray:
+    """Signed change in the underlying's distance-from-strike over the trailing
+    `window_sec` ticks. The spot-side counterpart of `odds_velocity`: pairing the
+    two separates a noise-drop (odds fell, spot did not) from a signal-drop (odds
+    fell because spot genuinely moved).
+
+    out[i] = move_pct[i] - move_pct[i-window_sec]; 0.0 for the first window.
+    """
+    m = np.asarray(move_pct, dtype="f8")
+    n = len(m)
+    out = np.zeros(n, dtype="f8")
+    for i in range(window_sec, n):
+        out[i] = m[i] - m[i - window_sec]
+    return out
