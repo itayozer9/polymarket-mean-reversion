@@ -9,20 +9,36 @@ def _parse_slug(slug: str) -> tuple[str, str, int]:
     return parts[0], parts[2], int(parts[3])
 
 
+def _safe_int(val) -> int | None:
+    """Convert to int, returning None if NaN/None."""
+    import math
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if math.isnan(f) else int(f)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_window_row(slug: str, ticks: pd.DataFrame,
                      outcome: str | None, end_price: float | None) -> dict:
-    """Summarize one window's ticks into a single canonical row."""
+    """Summarize one window's ticks into a single canonical row.
+
+    Handles malformed/partial windows gracefully (NaN in integer columns
+    becomes None, which Parquet stores as a nullable integer).
+    """
     sym, tf, wstart = _parse_slug(slug)
     return {
         "slug": slug,
         "symbol": sym,
         "timeframe": tf,
         "window_start_ts": wstart,
-        "window_end_ts": int(ticks["window_end_ts"].iloc[0]),
+        "window_end_ts": _safe_int(ticks["window_end_ts"].iloc[0]),
         "strike": float(ticks["start_price"].iloc[0]),
         "n_ticks": int(len(ticks)),
-        "first_sec": int(ticks["seconds_into_window"].min()),
-        "last_sec": int(ticks["seconds_into_window"].max()),
+        "first_sec": _safe_int(ticks["seconds_into_window"].min()),
+        "last_sec": _safe_int(ticks["seconds_into_window"].max()),
         "outcome": outcome,
         "outcome_up": (1 if outcome == "Up" else 0 if outcome == "Down" else None),
         "end_price": end_price,
