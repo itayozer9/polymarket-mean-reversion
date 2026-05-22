@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from research.wallets.analyze import (
+    MARKET_CASHFLOW_COLUMNS,
     MARKET_TYPES,
     MANIFEST_PATH,
     analyze_all,
@@ -19,9 +20,12 @@ from research.wallets.analyze import (
     load_manifest,
     load_onchain_roles,
     load_positions,
+    reconstruct_market_cashflow,
     reconstruct_roundtrips,
     summarize_wallet,
 )
+
+RANK1_WALLET = "0x6e1d5040d0ac73709b0621f620d2a60b80d2d0fa"
 
 _CACHE_PRESENT = MANIFEST_PATH.exists()
 needs_cache = pytest.mark.skipif(
@@ -221,7 +225,106 @@ def test_roundtrip_empty_input():
 
 
 # --------------------------------------------------------------------------
-# Cache-backed tests (3 real smoke wallets)
+# C2. reconstruct_market_cashflow — hand-built activity
+# --------------------------------------------------------------------------
+def _merge(ts, size, slug, tx="0xmerge", title=""):
+    return {"timestamp": ts, "type": "MERGE", "size": size, "usdc_size": size,
+            "transaction_hash": tx, "price": 0.0, "side": "", "title": title,
+            "outcome": "", "slug": slug}
+
+
+def _redeem(ts, size, slug, tx="0xredeem", title=""):
+    return {"timestamp": ts, "type": "REDEEM", "size": size, "usdc_size": size,
+            "transaction_hash": tx, "price": 0.0, "side": "", "title": title,
+            "outcome": "", "slug": slug}
+
+
+def test_cashflow_buy_yes_buy_no_then_merge():
+    # Mint-buy-merge: buy 100 YES @0.30 and 100 NO @0.65, then merge 100 pairs
+    # back to 100 USDC collateral. No on-chain receipts -> estimated taker fee
+    # on the two BUY legs only.
+    slug = "will-bitcoin-reach-78k-on-may-22"
+    activity = [
+        _trade(100, "BUY", 100.0, 0.30, slug=slug, outcome="Yes"),
+        _trade(110, "BUY", 100.0, 0.65, slug=slug, outcome="No"),
+        _merge(200, 100.0, slug),
+    ]
+    cf = reconstruct_market_cashflow(activity, wallet="0xw")
+    assert len(cf) == 1
+    row = cf.iloc[0]
+    buy_cost = 100.0 * 0.30 + 100.0 * 0.65
+    est_fee = (100.0 * 0.07 * 0.30 * 0.70) + (100.0 * 0.07 * 0.65 * 0.35)
+    assert row["cash_out"] == pytest.approx(buy_cost)
+    assert row["cash_in"] == pytest.approx(100.0)        # merge collateral
+    assert row["merge_usdc"] == pytest.approx(100.0)
+    assert row["fees"] == pytest.approx(est_fee)
+    # net = merge_collateral - buy_cost - fees
+    assert row["net_pnl"] == pytest.approx(100.0 - buy_cost - est_fee)
+    assert row["exit_mode"] == "merge"
+    assert row["n_buys"] == 2 and row["n_merges"] == 1
+
+
+def test_cashflow_buy_then_redeem():
+    # Buy 200 winning shares @0.40, hold to resolution, redeem for 200 USDC.
+    slug = "will-bitcoin-dip-to-75k-on-may-22"
+    activity = [
+        _trade(100, "BUY", 200.0, 0.40, slug=slug, outcome="Yes"),
+        _redeem(900, 200.0, slug),
+    ]
+    cf = reconstruct_market_cashflow(activity, wallet="0xw")
+    assert len(cf) == 1
+    row = cf.iloc[0]
+    buy_cost = 200.0 * 0.40
+    est_fee = 200.0 * 0.07 * 0.40 * 0.60
+    assert row["cash_out"] == pytest.approx(buy_cost)
+    assert row["cash_in"] == pytest.approx(200.0)
+    assert row["redeem_usdc"] == pytest.approx(200.0)
+    assert row["net_pnl"] == pytest.approx(200.0 - buy_cost - est_fee)
+    assert row["exit_mode"] == "redeem"
+
+
+def test_cashflow_uses_onchain_fee_once_per_tx():
+    # Two BUYs sharing one tx -> the on-chain fee is counted once, not twice.
+    slug = "btc-updown-15m-100"
+    activity = [
+        _trade(100, "BUY", 50.0, 0.40, slug=slug, outcome="Up", tx="0xt"),
+        _trade(110, "BUY", 50.0, 0.40, slug=slug, outcome="Up", tx="0xt"),
+        _redeem(900, 100.0, slug, tx="0xr"),
+    ]
+    onchain = [{"tx_hash": "0xt", "wallet": "0xw", "role": "taker",
+                "n_fills": 2, "total_fee_raw": 0, "fee_usdc": 1.5}]
+    cf = reconstruct_market_cashflow(activity, onchain_roles=onchain,
+                                     wallet="0xw")
+    row = cf.iloc[0]
+    assert row["fees"] == pytest.approx(1.5)  # counted once for the shared tx
+    assert row["net_pnl"] == pytest.approx(100.0 - 40.0 - 1.5)
+
+
+def test_cashflow_empty_input():
+    cf = reconstruct_market_cashflow([], wallet="0xw")
+    assert len(cf) == 0
+    assert list(cf.columns) == MARKET_CASHFLOW_COLUMNS
+
+
+@needs_cache
+def test_cashflow_on_rank1_wallet_is_merge_dominated():
+    # The rank-1 crypto wallet runs a merge-heavy strategy: its cash-flow
+    # frame must be non-empty and dominated by merge-exit markets.
+    activity = load_activity(RANK1_WALLET)
+    assert activity, "rank-1 wallet activity must be cached"
+    onchain = load_onchain_roles(RANK1_WALLET)
+    cf = reconstruct_market_cashflow(activity, onchain, wallet=RANK1_WALLET)
+    assert len(cf) > 0
+    # Merge is the single most common exit mode for this wallet.
+    mode_counts = cf["exit_mode"].value_counts()
+    assert mode_counts.idxmax() == "merge"
+    # And merge collateral is the largest share of total cash-in.
+    assert cf["merge_usdc"].sum() > cf["redeem_usdc"].sum()
+    assert cf["merge_usdc"].sum() > cf["sell_usdc"].sum()
+
+
+# --------------------------------------------------------------------------
+# Cache-backed tests
 # --------------------------------------------------------------------------
 @needs_cache
 def test_manifest_has_wallets():
@@ -245,10 +348,10 @@ def test_reconstruct_roundtrips_on_real_wallet():
 
 
 @needs_cache
-def test_analyze_all_on_smoke_cache():
+def test_analyze_all_on_cache():
     manifest = load_manifest()
     n_wallets = len(manifest["wallets"])
-    summary_df, roundtrips_df = analyze_all(manifest)
+    summary_df, roundtrips_df, cashflow_df = analyze_all(manifest)
     assert len(summary_df) == n_wallets
 
     pct_cols = ["pct_vol_15m", "pct_vol_hourly", "pct_vol_daily",
@@ -264,10 +367,16 @@ def test_analyze_all_on_smoke_cache():
         # resolution_exit_frac in [0,1] or NaN.
         ref = row["resolution_exit_frac"]
         assert (ref != ref) or (0.0 <= ref <= 1.0)
+        # cash-flow shares in [0,1] or NaN.
+        for c in ("merge_share", "redeem_share", "sell_share"):
+            v = row[c]
+            assert (v != v) or (-1e-9 <= v <= 1.0 + 1e-9)
 
-    # Round-trips concatenated across wallets carry a wallet column.
+    # Round-trips / cash-flows concatenated across wallets carry a wallet col.
     if len(roundtrips_df):
         assert set(roundtrips_df["wallet"]).issubset(set(manifest["wallets"]))
+    if len(cashflow_df):
+        assert set(cashflow_df["wallet"]).issubset(set(manifest["wallets"]))
 
 
 @needs_cache

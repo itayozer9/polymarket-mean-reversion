@@ -558,6 +558,195 @@ def reconstruct_roundtrips(
 
 
 # --------------------------------------------------------------------------
+# C2. Market-level cash-flow PnL
+# --------------------------------------------------------------------------
+# Verified empirically against the rank-1 wallet's real activity cache:
+#
+#   MERGE record:  type="MERGE",  size == usdc_size,  price == 0.0,
+#                  outcome == "",  side == "".
+#     A merge of N matched YES+NO pairs burns N YES + N NO shares and returns
+#     N USDC of collateral. The activity record reports that returned
+#     collateral in BOTH `size` and `usdc_size` (they are equal). So the USDC
+#     a merge returns to the wallet == record["usdc_size"].
+#
+#   REDEEM record: type="REDEEM", size == usdc_size, price == 0.0,
+#                  outcome == "",  side == "".
+#     A redeem of N winning shares pays N * 1.0 == N USDC. The record reports
+#     that payout in both `size` and `usdc_size` (equal). Losing shares are
+#     never redeemed (they expire worthless and generate no record). So the
+#     USDC a redeem pays == record["usdc_size"].
+#
+#   TRADE record:  `usdc_size` is the cash leg of the fill (size * price).
+#     A BUY spends `usdc_size`; a SELL receives `usdc_size`.
+#
+# Because a binary market's YES and NO outcomes share one slug, grouping all
+# of a wallet's records by `slug` captures the entire market — both legs of a
+# mint-buy-merge cycle — so the cash-flow nets correctly without a conditionId.
+
+MARKET_CASHFLOW_COLUMNS = [
+    "wallet", "slug", "market_type",
+    "cash_out", "cash_in", "fees", "net_pnl",
+    "buy_usdc", "sell_usdc", "merge_usdc", "redeem_usdc",
+    "n_buys", "n_sells", "n_merges", "n_redeems",
+    "exit_mode",
+]
+
+
+def reconstruct_market_cashflow(
+    activity: list[dict],
+    onchain_roles: Optional[list[dict]] = None,
+    wallet: str = "",
+) -> pd.DataFrame:
+    """Market-level realized PnL by raw USDC cash flow, grouped by ``slug``.
+
+    Unlike :func:`reconstruct_roundtrips` (FIFO directional matching, which
+    cannot value a non-directional mint-buy-merge cycle), this nets every USDC
+    movement through a market:
+
+    * ``cash_out`` — Σ ``usdc_size`` of all BUY trades (both outcomes).
+    * ``cash_in``  — Σ SELL proceeds + Σ MERGE collateral returned
+      + Σ REDEEM proceeds (see field-semantics note above).
+    * ``fees``     — Σ on-chain ``fee_usdc`` joined by ``transaction_hash``
+      where a receipt was decoded; otherwise an estimated taker fee
+      (``shares * 0.07 * p * (1-p)``) for the BUY/SELL legs only (MERGE/REDEEM
+      are CTF contract calls, not order fills — no spread/maker fee).
+    * ``net_pnl``  — ``cash_in - cash_out - fees``.
+
+    This is strictly more correct than FIFO for *total realized PnL*: it counts
+    directional holds, sells, AND merges uniformly. A merge-heavy wallet that
+    mints both YES+NO and merges back is running a non-directional liquidity /
+    mint-merge strategy whose PnL FIFO matching cannot see.
+
+    Caveats. (1) The ``/activity`` endpoint caps history at ~4000 records, so a
+    truncated wallet's oldest BUYs may be missing while their later
+    MERGE/REDEEM is present (or vice versa) — individual unresolved or
+    half-truncated markets can show a spurious sign. The wallet *total* is far
+    more reliable than any single market row. (2) ``exit_mode`` is whichever of
+    merge / redeem / sell contributes the most USDC to ``cash_in``.
+
+    Returns one row per ``slug``. Empty frame (with columns) for empty input.
+    """
+    cols = MARKET_CASHFLOW_COLUMNS
+    if not activity:
+        return pd.DataFrame(columns=cols)
+
+    fee_by_tx = _onchain_fee_by_tx(onchain_roles or [])
+
+    # Per-slug accumulators.
+    @dataclasses.dataclass
+    class _Acc:
+        title: str = ""
+        buy_usdc: float = 0.0
+        sell_usdc: float = 0.0
+        merge_usdc: float = 0.0
+        redeem_usdc: float = 0.0
+        n_buys: int = 0
+        n_sells: int = 0
+        n_merges: int = 0
+        n_redeems: int = 0
+        fees: float = 0.0
+        # tx_hashes whose fee we still need to add (deduped: an on-chain
+        # fee is per-tx, so the same tx must not be counted twice).
+        seen_fee_tx: set = dataclasses.field(default_factory=set)
+        # estimated-fee accumulator for legs without an on-chain receipt.
+        est_fees: float = 0.0
+
+    accs: dict[str, _Acc] = {}
+
+    for rec in activity:
+        slug = rec.get("slug") or ""
+        if not slug:
+            continue  # cannot attribute a record with no market slug
+        acc = accs.get(slug)
+        if acc is None:
+            acc = accs[slug] = _Acc(title=rec.get("title") or "")
+        if not acc.title and rec.get("title"):
+            acc.title = rec.get("title")
+
+        rtype = rec.get("type")
+        side = rec.get("side") or ""
+        usdc = float(rec.get("usdc_size") or 0.0)
+        size = float(rec.get("size") or 0.0)
+        price = float(rec.get("price") or 0.0)
+        tx = str(rec.get("transaction_hash") or "").lower()
+
+        if rtype == "TRADE" and side == "BUY":
+            acc.buy_usdc += usdc
+            acc.n_buys += 1
+            _accumulate_fee(acc, tx, fee_by_tx, size, price)
+        elif rtype == "TRADE" and side == "SELL":
+            acc.sell_usdc += usdc
+            acc.n_sells += 1
+            _accumulate_fee(acc, tx, fee_by_tx, size, price)
+        elif rtype == "MERGE":
+            # size == usdc_size == USDC collateral returned by the merge.
+            acc.merge_usdc += usdc
+            acc.n_merges += 1
+            # A merge can carry an on-chain fee if decoded; no estimate
+            # otherwise (it is a CTF call, not an order fill).
+            _accumulate_fee(acc, tx, fee_by_tx, 0.0, 0.0)
+        elif rtype == "REDEEM":
+            # size == usdc_size == USDC paid out for winning shares.
+            acc.redeem_usdc += usdc
+            acc.n_redeems += 1
+            _accumulate_fee(acc, tx, fee_by_tx, 0.0, 0.0)
+        # REWARD / MAKER_REBATE etc. are ignored here (not BUY cost or a
+        # position exit); they are small and handled, if at all, elsewhere.
+
+    rows: list[dict] = []
+    for slug, acc in accs.items():
+        cash_in = acc.sell_usdc + acc.merge_usdc + acc.redeem_usdc
+        cash_out = acc.buy_usdc
+        fees = acc.fees + acc.est_fees
+        # exit_mode = whichever exit channel dominates cash_in.
+        channels = {"merge": acc.merge_usdc, "redeem": acc.redeem_usdc,
+                    "sell": acc.sell_usdc}
+        if cash_in <= 0:
+            exit_mode = "none"
+        else:
+            exit_mode = max(channels, key=channels.get)
+        rows.append({
+            "wallet": wallet,
+            "slug": slug,
+            "market_type": classify_market(acc.title, slug).market_type,
+            "cash_out": cash_out,
+            "cash_in": cash_in,
+            "fees": fees,
+            "net_pnl": cash_in - cash_out - fees,
+            "buy_usdc": acc.buy_usdc,
+            "sell_usdc": acc.sell_usdc,
+            "merge_usdc": acc.merge_usdc,
+            "redeem_usdc": acc.redeem_usdc,
+            "n_buys": acc.n_buys,
+            "n_sells": acc.n_sells,
+            "n_merges": acc.n_merges,
+            "n_redeems": acc.n_redeems,
+            "exit_mode": exit_mode,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    return pd.DataFrame(rows)[cols].reset_index(drop=True)
+
+
+def _accumulate_fee(acc, tx: str, fee_by_tx: dict[str, float],
+                    size: float, price: float) -> None:
+    """Add the fee for one record to its market accumulator.
+
+    On-chain fees are per-transaction: if several of a market's records share
+    one ``tx_hash`` the receipt's ``fee_usdc`` is added only once. When no
+    receipt was decoded for the tx, an estimated taker fee is added for order
+    fills (``size > 0``); MERGE/REDEEM CTF calls get no estimate.
+    """
+    if tx and tx in fee_by_tx:
+        if tx not in acc.seen_fee_tx:
+            acc.seen_fee_tx.add(tx)
+            acc.fees += fee_by_tx[tx]
+    elif size > 0 and 0.0 < price < 1.0:
+        acc.est_fees += size * TAKER_FEE_RATE * price * (1.0 - price)
+
+
+# --------------------------------------------------------------------------
 # D. Per-wallet summary
 # --------------------------------------------------------------------------
 def _pct(numerator: float, denominator: float) -> float:
@@ -577,12 +766,15 @@ def summarize_wallet(
     onchain_roles: list[dict],
     positions: list[dict],
     leaderboards: Optional[dict[str, list[dict]]] = None,
+    market_cashflow: Optional[pd.DataFrame] = None,
 ) -> dict:
     """One row of per-wallet metrics. Pure: dict in -> dict out.
 
     ``manifest_entry`` is ``manifest["wallets"][wallet]``. ``leaderboards`` (if
     given) is the output of :func:`load_leaderboards`; it supplies per-board
     pnl/vol/user_name, which the manifest's ``boards`` list does not carry.
+    ``market_cashflow`` is the output of :func:`reconstruct_market_cashflow`
+    for this wallet; if omitted it is recomputed from ``activity``.
     """
     manifest_entry = manifest_entry or {}
     leaderboards = leaderboards or {}
@@ -685,6 +877,61 @@ def summarize_wallet(
                   "resolution_exit_frac"):
             out[k] = float("nan")
 
+    # ---- Market-level cash-flow PnL (the honest realized PnL) -------------
+    # Nets every USDC movement per market (buy cost vs sell/merge/redeem
+    # proceeds minus fees). Unlike the FIFO round-trip PnL above, this counts
+    # mint-buy-merge cycles, so it captures how a merge-heavy wallet earns.
+    cf = market_cashflow
+    if cf is None:
+        cf = reconstruct_market_cashflow(activity, onchain_roles, wallet=wallet)
+    out["n_markets"] = int(len(cf))
+    if len(cf):
+        out["total_realized_pnl_cashflow"] = float(cf["net_pnl"].sum())
+        # PnL bucketed by each market's dominant exit channel.
+        by_mode = cf.groupby("exit_mode")["net_pnl"].sum()
+        out["pnl_via_merge"] = float(by_mode.get("merge", 0.0))
+        out["pnl_via_redeem"] = float(by_mode.get("redeem", 0.0))
+        out["pnl_via_sell"] = float(by_mode.get("sell", 0.0))
+        out["n_markets_merge_exit"] = int((cf["exit_mode"] == "merge").sum())
+        out["n_markets_redeem_exit"] = int((cf["exit_mode"] == "redeem").sum())
+        out["n_markets_sell_exit"] = int((cf["exit_mode"] == "sell").sum())
+        # Wallet-total event counts.
+        out["n_merges"] = int(cf["n_merges"].sum())
+        out["n_redeems"] = int(cf["n_redeems"].sum())
+        out["n_sells"] = int(cf["n_sells"].sum())
+        total_cash_in = float(cf["cash_in"].sum())
+        out["total_cash_in"] = total_cash_in
+        out["total_cash_out"] = float(cf["cash_out"].sum())
+        out["total_fees_cashflow"] = float(cf["fees"].sum())
+        # Share of all incoming cash that arrived via merges — the headline
+        # "is this a mint-merge wallet?" signal.
+        out["merge_share"] = _pct(float(cf["merge_usdc"].sum()), total_cash_in)
+        out["redeem_share"] = _pct(float(cf["redeem_usdc"].sum()),
+                                   total_cash_in)
+        out["sell_share"] = _pct(float(cf["sell_usdc"].sum()), total_cash_in)
+    else:
+        for k in ("total_realized_pnl_cashflow", "pnl_via_merge",
+                  "pnl_via_redeem", "pnl_via_sell", "total_cash_in",
+                  "total_cash_out", "total_fees_cashflow", "merge_share",
+                  "redeem_share", "sell_share"):
+            out[k] = float("nan")
+        for k in ("n_markets_merge_exit", "n_markets_redeem_exit",
+                  "n_markets_sell_exit", "n_merges", "n_redeems", "n_sells"):
+            out[k] = 0
+
+    # Reconcile cash-flow PnL against the MONTH-board leaderboard pnl. The
+    # 4000-record activity cap means a truncated wallet's history is partial,
+    # so this ratio is a sanity check, not an equality — surface it as-is.
+    lb_pnl_month = out.get("lb_pnl_month")
+    if (lb_pnl_month is not None and not pd.isna(lb_pnl_month)
+            and lb_pnl_month not in (0, 0.0)
+            and not pd.isna(out.get("total_realized_pnl_cashflow",
+                                    float("nan")))):
+        out["pnl_reconcile_ratio"] = float(
+            out["total_realized_pnl_cashflow"] / lb_pnl_month)
+    else:
+        out["pnl_reconcile_ratio"] = float("nan")
+
     # ---- Sizing (per BUY trade usdc_size) --------------------------------
     sizes = pd.Series([float(r.get("usdc_size") or 0.0) for r in trades],
                       dtype="float64")
@@ -743,14 +990,17 @@ def summarize_wallet(
 def analyze_all(
     manifest: Optional[dict] = None,
     leaderboards: Optional[dict[str, list[dict]]] = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Run :func:`summarize_wallet` over every wallet in the manifest.
 
-    Returns ``(summary_df, roundtrips_df)``:
+    Returns ``(summary_df, roundtrips_df, market_cashflow_df)``:
 
     * ``summary_df`` — one row per wallet, the per-wallet metrics.
-    * ``roundtrips_df`` — every wallet's round-trips concatenated (the
-      ``wallet`` column identifies the owner).
+    * ``roundtrips_df`` — every wallet's FIFO round-trips concatenated (the
+      ``wallet`` column identifies the owner). Source for hold-time and
+      directional per-trade distributions.
+    * ``market_cashflow_df`` — every wallet's per-market cash-flow rows
+      concatenated. Source for honest total realized PnL incl. mint-merge.
     """
     if manifest is None:
         manifest = load_manifest()
@@ -760,6 +1010,7 @@ def analyze_all(
     wallets = (manifest or {}).get("wallets", {}) or {}
     summary_rows: list[dict] = []
     all_rt: list[pd.DataFrame] = []
+    all_cf: list[pd.DataFrame] = []
 
     for wallet, entry in wallets.items():
         activity = load_activity(wallet)
@@ -767,35 +1018,49 @@ def analyze_all(
         onchain = load_onchain_roles(wallet)
         rt = reconstruct_roundtrips(activity, wallet=wallet,
                                     onchain_roles=onchain)
+        cf = reconstruct_market_cashflow(activity, onchain, wallet=wallet)
         if len(rt):
             all_rt.append(rt)
+        if len(cf):
+            all_cf.append(cf)
         summary_rows.append(summarize_wallet(
             wallet, entry, activity, rt, onchain, positions, leaderboards,
+            market_cashflow=cf,
         ))
         log.info("wallet_analyzed", wallet=wallet,
                  n_roundtrips=int((rt["exit_kind"] != "open").sum())
-                 if len(rt) else 0)
+                 if len(rt) else 0,
+                 n_markets=len(cf))
 
     summary_df = pd.DataFrame(summary_rows)
     roundtrips_df = (pd.concat(all_rt, ignore_index=True) if all_rt
                      else pd.DataFrame(columns=ROUNDTRIP_COLUMNS))
-    return summary_df, roundtrips_df
+    market_cashflow_df = (pd.concat(all_cf, ignore_index=True) if all_cf
+                          else pd.DataFrame(columns=MARKET_CASHFLOW_COLUMNS))
+    return summary_df, roundtrips_df, market_cashflow_df
 
 
 def write_derived(summary_df: pd.DataFrame, roundtrips_df: pd.DataFrame,
-                  directory: Optional[Path] = None) -> tuple[Path, Path]:
+                  market_cashflow_df: Optional[pd.DataFrame] = None,
+                  directory: Optional[Path] = None,
+                  ) -> tuple[Path, Path, Path]:
     """Convenience: persist the analysis output as parquet for Task 2.2.
 
-    Writes ``wallet_summary.parquet`` and ``roundtrips.parquet`` under
-    ``data/wallets/derived/`` (gitignored). Returns the two paths.
+    Writes ``wallet_summary.parquet``, ``roundtrips.parquet`` and
+    ``market_cashflow.parquet`` under ``data/wallets/derived/`` (gitignored).
+    Returns the three paths.
     """
     directory = Path(directory) if directory is not None else DERIVED_DIR
     directory.mkdir(parents=True, exist_ok=True)
     summary_path = directory / "wallet_summary.parquet"
     rt_path = directory / "roundtrips.parquet"
+    cf_path = directory / "market_cashflow.parquet"
+    if market_cashflow_df is None:
+        market_cashflow_df = pd.DataFrame(columns=MARKET_CASHFLOW_COLUMNS)
     summary_df.to_parquet(summary_path, index=False)
     roundtrips_df.to_parquet(rt_path, index=False)
-    return summary_path, rt_path
+    market_cashflow_df.to_parquet(cf_path, index=False)
+    return summary_path, rt_path, cf_path
 
 
 def main() -> None:
@@ -804,17 +1069,22 @@ def main() -> None:
     manifest = load_manifest()
     n = len((manifest or {}).get("wallets", {}) or {})
     log.info("analyze_start", n_wallets=n)
-    summary_df, roundtrips_df = analyze_all(manifest)
-    summary_path, rt_path = write_derived(summary_df, roundtrips_df)
+    summary_df, roundtrips_df, cashflow_df = analyze_all(manifest)
+    summary_path, rt_path, cf_path = write_derived(
+        summary_df, roundtrips_df, cashflow_df)
     log.info("analyze_done",
              n_wallets=len(summary_df),
              n_roundtrips=len(roundtrips_df),
+             n_markets=len(cashflow_df),
              summary_path=str(summary_path),
-             roundtrips_path=str(rt_path))
+             roundtrips_path=str(rt_path),
+             cashflow_path=str(cf_path))
     print(f"Analyzed {len(summary_df)} wallets, "
-          f"{len(roundtrips_df)} round-trips.")
+          f"{len(roundtrips_df)} round-trips, "
+          f"{len(cashflow_df)} market cash-flows.")
     print(f"  -> {summary_path}")
     print(f"  -> {rt_path}")
+    print(f"  -> {cf_path}")
 
 
 if __name__ == "__main__":
