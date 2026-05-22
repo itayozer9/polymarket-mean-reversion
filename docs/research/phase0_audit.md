@@ -787,4 +787,87 @@ backtest that cheated by peeking at future prices. The edge problem is real and
 must be solved with a real edge — not by fixing a leak (there is none).
 
 ## Task 8 — Sim vs live-paper reconciliation
-_pending_
+
+Script: `research/audit/reconcile.py`. Run via `uv run python -m research.audit.reconcile`.
+Strategies checked: `cfg_21c8c00165b3` (175 trades) and `v2_gold_03_down_all` (117 trades).
+All 292 trades are May dates (2026-05-16 to 2026-05-22 — the trustworthy regime).
+Fill price tolerance: ±0.005 (0.5¢). Timestamp match window: ±2 s.
+
+### Fill model
+
+The simulator uses `cfg.fill.realistic_fill_model=True`:
+
+- **Entry:** `effective_ask = min(1, depth/bet)×ask + max(0, 1−depth/bet)×(ask+0.02)` — fills
+  at `yes_best_ask` (UP) or `no_best_ask` (DOWN); portion exceeding top-of-book depth fills
+  2¢ worse.
+- **Exit:** `effective_bid = min(1, depth/target)×bid + max(0, 1−depth/target)×(bid−0.02)` —
+  where `target = shares × bid`. Portion exceeding bid depth fills 2¢ worse (toward 0).
+
+The reconcile script checks each recorded fill against **both** the raw book best_ask/bid
+AND the depth-adjusted model price. A fill is "reproducible" if it matches either within
+tolerance.
+
+### Results
+
+| Strategy | Trades | Tick data | Entry repro | Exit repro | Both repro |
+|----------|--------|-----------|-------------|------------|------------|
+| `cfg_21c8c00165b3` | 175 | 150 (85.7%) | 150/175 (85.7%) | 150/175 (85.7%) | 150/175 (85.7%) |
+| `v2_gold_03_down_all` | 117 | 117 (100%) | 117/117 (100.0%) | 117/117 (100.0%) | 117/117 (100.0%) |
+| **Combined** | **292** | **267 (91.4%)** | **267/292 (91.4%)** | **267/292 (91.4%)** | **267/292 (91.4%)** |
+
+**With-ticks-only fraction (fair comparison, excluding data-gap trades):**
+
+| Metric | Value |
+|--------|-------|
+| Entry reproducible | 267/267 (100.0%) |
+| Exit reproducible | 267/267 (100.0%) |
+| Both reproducible | 267/267 (100.0%) |
+| Mean entry discrepancy (best of raw vs model) | 0.00000 |
+| Mean exit discrepancy (best of raw vs model) | 0.00000 |
+
+Mean raw discrepancy (before depth-model correction): entry 0.00018, exit 0.00096. After
+applying the depth-walk model, discrepancy drops to effectively 0.00000 for both. This
+confirms the simulator fills **exactly** as the depth-walk formula dictates, using prices
+drawn directly from the live tick files.
+
+### Root cause of the 25 non-reconcilable trades
+
+**CONCERN: 25 trades from `cfg_21c8c00165b3` (all on 2026-05-16) have no tick data to
+reconcile against.** The live tick file `btc|eth|sol|xrp_2026-05-16.csv.gz` was truncated
+at 07:19 UTC (likely due to a collector restart). These trades were placed by the paper
+engine between 07:19 and end-of-day on May 16, during a period when the tick writer had
+not yet resumed. The fills were recorded by the paper engine but the corresponding tick
+snapshots were not captured in the CSV. These 25 trades are counted as non-reproducible
+in the all-trades fraction (91.4%) but do not represent fill inaccuracy — they represent a
+data-collection gap, not a simulation error.
+
+### Depth-walk model: example verification
+
+One trade (slug `btc-updown-15m-1779065100`, exit ts `1779065523000`) shows a recorded
+`exit_price = 0.5489` vs raw `no_best_bid = 0.5600` (raw discrepancy 0.011). Applying
+the model: `shares = 40`, `bid = 0.56`, `no_bid_depth = 10.00 USD`,
+`target_usd = 40 × 0.56 = 22.4`. `portion_at_best = 10/22.4 = 0.4464`,
+`portion_above = 0.5536`, `worse_bid = 0.54`. Modeled price: `0.4464×0.56 + 0.5536×0.54 = 0.5489`.
+Matches the recorded exit price to 5 decimal places, confirming the fill model is faithfully
+reproduced and the apparent discrepancy is intentional depth-walk slippage.
+
+### Verdict
+
+**PASS: Fills are honest.** The recorded fills match what the live book quoted, once the
+depth-walk fill model is accounted for:
+
+- **Reproducible fraction (with-ticks-only): 100.0%** — above the 90% threshold.
+- **Mean price discrepancy: 0.00000** — well below the 0.01 threshold.
+- The simulator and paper engine are using exactly the prices available in the live tick
+  stream, with no cherry-picking or lookahead in the fill logic.
+
+**The bot's paper losses are genuine strategy failure — not a fill artifact.** The
+backtest fills used `yes/no_best_ask` and `yes/no_best_bid` from real tick data; the paper
+engine replicated these exactly in live mode. The losses are real.
+
+**Implication for Phase 2+:** The depth-walk model is internally consistent but adds
+**real cost beyond the spread + fee** when fills exceed top-of-book depth. This is already
+reflected in the live PnL. Phase 5 strategy construction should note that SOL/XRP (median
+ask_depth ~$14) will routinely trigger the 2¢ slippage penalty on $10 fills (14/10 < 2 →
+portion_at_best < 1), adding ~$0.55–0.80 to round-trip cost on top of the fee + spread
+already quantified in Task 6.
