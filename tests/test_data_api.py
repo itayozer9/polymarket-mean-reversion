@@ -54,6 +54,24 @@ async def test_fetch_leaderboard_returns_entries():
 
 
 @pytest.mark.asyncio
+async def test_fetch_leaderboard_paginates_across_pages():
+    # page_size=2 with max_entries=5 forces 3 requests (2 + 2 + 1), exercising
+    # the offset-increment + out.extend pagination loop across pages.
+    async with http_session(timeout_sec=20) as session:
+        try:
+            entries = await fetch_leaderboard(
+                session, page_size=2, max_entries=5
+            )
+        except _NET_ERRORS:
+            pytest.skip("data-api unreachable — skipping pagination test")
+    assert len(entries) == 5
+    wallets = [e.proxy_wallet for e in entries]
+    assert len(set(wallets)) == 5, "expected distinct proxy_wallet across pages"
+    ranks = [e.rank for e in entries]
+    assert ranks == sorted(ranks), "ranks should be ascending across pages"
+
+
+@pytest.mark.asyncio
 async def test_fetch_activity_returns_records():
     async with http_session(timeout_sec=20) as session:
         try:
