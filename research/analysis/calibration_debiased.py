@@ -78,25 +78,57 @@ TASK6_20BIN_HEADLINE_GAP_C = 13.25  # mean realized-predicted over thick bins
 # Cross-section construction: one obs per (window, time-slice)
 # ===========================================================================
 
-def build_slice_cross_section(dev: pd.DataFrame) -> pd.DataFrame:
-    """For each window (slug) and each fixed time-slice t, take the single tick
-    whose ``seconds_into_window`` is closest to t, provided it is within
-    SLICE_TOL seconds. Each surviving (slug, t) pair contributes ONE row.
+# Columns the original Task 6b cross-section exposed. build_slice_cross_section
+# returns exactly these (plus dist_to_t, t) so its behaviour is unchanged.
+_SLICE_CS_COLS = [
+    "slug", "symbol", "seconds_into_window", "time_left_sec",
+    "cheap_side", "cheap_mid", "cheap_ask", "cheap_won",
+    "sigma_proximity",
+]
 
-    Returns a frame with one row per (slug, t): cheap_mid, cheap_ask,
-    cheap_side, cheap_won, slug, symbol, t, seconds_into_window, time_left_sec,
-    sigma_proximity, dist_to_t.
+
+def build_cross_section(dev: pd.DataFrame,
+                        time_slices=None,
+                        slice_tol: int = SLICE_TOL) -> pd.DataFrame:
+    """De-biased cross-section: one observation per (window, time-slice).
+
+    For each window (``slug``) and each fixed time-slice ``t`` in
+    ``time_slices`` (default :data:`TIME_SLICES`), take the single tick whose
+    ``seconds_into_window`` is closest to ``t``, provided it is within
+    ``slice_tol`` seconds. Each surviving (slug, t) pair contributes ONE row.
+
+    This is the de-biasing fix from Task 6b: ~87% of ticks are stale, so a
+    lingering price is over-sampled; sampling one tick per window per slice
+    removes that tick-weighting bias. Every analysis built on the de-biased
+    cross-section (calibration, the conditioned edge map) should call this.
+
+    Unlike :func:`build_slice_cross_section` (which keeps only the columns the
+    original Task 6b calibration needed), this keeps **all feature columns**
+    present in ``dev`` -- ``cheap_drop_30s``, ``realized_vol``, ``symbol``,
+    ``proximity_pct``, ``cheap_imbalance``, ``date``, etc. -- so downstream
+    conditioning (the edge map) has every conditioner available.
+
+    Parameters
+    ----------
+    dev:
+        Tick-level frame (entry-candidate rows), already filtered to the dev
+        split and to finite/labelled rows by the caller.
+    time_slices:
+        Seconds-into-window slices to sample. Defaults to :data:`TIME_SLICES`.
+    slice_tol:
+        Tolerance in seconds for "closest tick to t".
+
+    Returns
+    -------
+    DataFrame with one row per (slug, t): every column of ``dev`` plus
+    ``dist_to_t`` (|seconds_into_window - t|) and ``t`` (the slice).
     """
-    keep_cols = [
-        "slug", "symbol", "seconds_into_window", "time_left_sec",
-        "cheap_side", "cheap_mid", "cheap_ask", "cheap_won",
-        "sigma_proximity",
-    ]
+    slices = TIME_SLICES if time_slices is None else list(time_slices)
     pieces = []
-    for t in TIME_SLICES:
+    for t in slices:
         win = dev[
-            (dev["seconds_into_window"] >= t - SLICE_TOL)
-            & (dev["seconds_into_window"] <= t + SLICE_TOL)
+            (dev["seconds_into_window"] >= t - slice_tol)
+            & (dev["seconds_into_window"] <= t + slice_tol)
         ].copy()
         if win.empty:
             continue
@@ -106,9 +138,25 @@ def build_slice_cross_section(dev: pd.DataFrame) -> pd.DataFrame:
         win = win.sort_values(["slug", "dist_to_t", "seconds_into_window"])
         picked = win.groupby("slug", as_index=False).first()
         picked["t"] = t
-        pieces.append(picked[keep_cols + ["dist_to_t", "t"]])
+        pieces.append(picked)
     xs = pd.concat(pieces, ignore_index=True)
     return xs
+
+
+def build_slice_cross_section(dev: pd.DataFrame) -> pd.DataFrame:
+    """For each window (slug) and each fixed time-slice t, take the single tick
+    whose ``seconds_into_window`` is closest to t, provided it is within
+    SLICE_TOL seconds. Each surviving (slug, t) pair contributes ONE row.
+
+    Returns a frame with one row per (slug, t): cheap_mid, cheap_ask,
+    cheap_side, cheap_won, slug, symbol, t, seconds_into_window, time_left_sec,
+    sigma_proximity, dist_to_t.
+
+    This is the column-narrowed form of :func:`build_cross_section`, kept so the
+    Task 6b calibration's behaviour and output schema are unchanged.
+    """
+    xs = build_cross_section(dev)
+    return xs[_SLICE_CS_COLS + ["dist_to_t", "t"]].reset_index(drop=True)
 
 
 # ===========================================================================

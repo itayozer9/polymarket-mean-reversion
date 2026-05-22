@@ -327,3 +327,230 @@ The narrower [0.10,0.20) band DOES trend up (+17.1c, rho=+0.94) -- but that band
 **Chart:** `docs/research/charts/calibration_debiased.png`
 
 ---
+
+## Conditioned edge map
+
+
+**Task 7.** Where is the cheap-side mispricing concentrated? An edge -- if any -- lives in specific conditions, not everywhere.
+
+**Methodology override.** The plan's Task 7 said to compute the edge per *tick* and average within strata. That carries the tick-weighting / lingering bias Phase 0 documented (~87% of ticks are stale; a lingering price is over-sampled) and Task 6b corrected. This edge map is therefore built on the **de-biased cross-section**: one observation per window per time-slice (t in [60, 120, 240, 360, 480, 600, 720]s, the single tick within +/-5s of each t), dev rows only -- reusing `build_cross_section()` from `calibration_debiased.py`. Cross-section: **11,700 observations**, **1,676 windows**. Edge = `cheap_won - cheap_mid` (realized minus implied; positive = underpriced = buyer edge). All CIs are 90% window-clustered bootstrap (groups=slug, n=2000).
+
+### Recorded realized_vol tertile cutoffs
+
+Computed from the dev cross-section -- these REPLACE the uncalibrated hardcoded `vol_regime_thresholds` guesses (phase0_verdict.md, code-audit #9):
+
+| Tertile | realized_vol range |
+|---------|--------------------|
+| LOW  | `< 0.003800` |
+| MED  | `0.003800 .. 0.007200` |
+| HIGH | `>= 0.007200` |
+
+### One-dimensional conditioned edge maps
+
+#### Edge by sigma_proximity
+
+| Bucket | n_windows | n_obs | Mean edge | CI lo | CI hi | CI excl. 0 | Note |
+|--------|-----------|-------|-----------|-------|-------|------------|------|
+| <0.5 | 862 | 2,402 | +13.20c | +10.52c | +15.72c | yes |  |
+| 0.5-1 | 1,120 | 2,090 | +12.71c | +10.50c | +14.95c | yes |  |
+| 1-2 | 1,381 | 2,820 | +10.18c | +8.30c | +12.00c | yes |  |
+| 2-4 | 1,171 | 2,467 | +11.75c | +9.76c | +13.73c | yes |  |
+| >4 | 879 | 1,811 | +12.51c | +10.09c | +15.06c | yes |  |
+
+#### Edge by time_left_sec
+
+| Bucket | n_windows | n_obs | Mean edge | CI lo | CI hi | CI excl. 0 | Note |
+|--------|-----------|-------|-----------|-------|-------|------------|------|
+| <180 | 0 | 0 | n/a | n/a | n/a | no | thin |
+| 180-420 | 1,672 | 3,344 | +19.59c | +17.84c | +21.32c | yes |  |
+| 420-660 | 1,672 | 3,340 | +11.89c | +10.10c | +13.59c | yes |  |
+| >660 | 1,672 | 5,016 | +6.87c | +5.34c | +8.41c | yes |  |
+
+#### Edge by cheap_drop_30s (%)
+
+| Bucket | n_windows | n_obs | Mean edge | CI lo | CI hi | CI excl. 0 | Note |
+|--------|-----------|-------|-----------|-------|-------|------------|------|
+| 0 | 1,553 | 3,990 | +11.92c | +10.23c | +13.73c | yes |  |
+| 0-10 | 1,290 | 2,367 | +9.20c | +7.31c | +11.15c | yes |  |
+| 10-25 | 1,427 | 2,832 | +8.90c | +7.10c | +10.77c | yes |  |
+| >25 | 1,360 | 2,511 | +17.96c | +15.96c | +19.98c | yes |  |
+
+#### Edge by cheap_mid
+
+| Bucket | n_windows | n_obs | Mean edge | CI lo | CI hi | CI excl. 0 | Note |
+|--------|-----------|-------|-----------|-------|-------|------------|------|
+| 0.05-0.15 | 1,046 | 1,735 | +19.47c | +16.93c | +21.96c | yes |  |
+| 0.15-0.25 | 1,116 | 1,727 | +15.14c | +12.70c | +17.65c | yes |  |
+| 0.25-0.40 | 1,506 | 3,475 | +9.37c | +7.41c | +11.35c | yes |  |
+
+#### Edge by symbol
+
+| Bucket | n_windows | n_obs | Mean edge | CI lo | CI hi | CI excl. 0 | Note |
+|--------|-----------|-------|-----------|-------|-------|------------|------|
+| btc | 419 | 2,925 | +11.68c | +9.01c | +14.35c | yes |  |
+| eth | 419 | 2,925 | +14.75c | +12.00c | +17.25c | yes |  |
+| sol | 419 | 2,925 | +10.49c | +7.98c | +13.14c | yes |  |
+| xrp | 419 | 2,925 | +10.84c | +8.25c | +13.37c | yes |  |
+
+#### Edge by realized_vol tertile
+
+| Bucket | n_windows | n_obs | Mean edge | CI lo | CI hi | CI excl. 0 | Note |
+|--------|-----------|-------|-----------|-------|-------|------------|------|
+| LOW | 1,323 | 3,900 | +13.62c | +11.72c | +15.50c | yes |  |
+| MED | 1,519 | 3,900 | +13.55c | +11.90c | +15.33c | yes |  |
+| HIGH | 1,313 | 3,900 | +8.64c | +6.77c | +10.42c | yes |  |
+
+### Cross-tabulation of the strongest conditioners
+
+The core thesis test: is the edge concentrated where sigma_proximity is LOW (spot still near strike -- a genuine panic overshoot, H8/H2) or spread everywhere (suspicious)?
+
+#### sigma_proximity x cheap_drop_30s -- mean edge (cents)
+
+| sigma_bucket \ drop_bucket | 0 | 0-10 | 10-25 | >25 |
+|---|---|---|---|---|
+| **<0.5** | +15.18c* (n=491) | +10.58c* (n=376) | +10.17c* (n=448) | +17.00c* (n=394) |
+| **0.5-1** | +12.96c* (n=559) | +8.15c* (n=359) | +10.10c* (n=443) | +19.70c* (n=382) |
+| **1-2** | +10.14c* (n=740) | +9.69c* (n=461) | +5.31c* (n=580) | +16.24c* (n=521) |
+| **2-4** | +12.08c* (n=643) | +7.66c* (n=409) | +10.71c* (n=448) | +16.22c* (n=453) |
+| **>4** | +9.80c* (n=502) | +11.16c* (n=302) | +8.96c* (n=296) | +21.82c* (n=339) |
+
+`*` = 90% window-clustered CI excludes zero and n_windows >= 30.
+
+#### sigma_proximity x cheap_mid -- mean edge (cents)
+
+| sigma_bucket \ cheap_mid_bucket | 0.05-0.15 | 0.15-0.25 | 0.25-0.40 |
+|---|---|---|---|
+| **<0.5** | +29.21c* (n=230) | +21.09c* (n=291) | +7.79c* (n=504) |
+| **0.5-1** | +22.68c* (n=229) | +14.27c* (n=288) | +10.17c* (n=544) |
+| **1-2** | +19.27c* (n=335) | +19.59c* (n=332) | +6.26c* (n=660) |
+| **2-4** | +15.62c* (n=357) | +10.12c* (n=319) | +12.90c* (n=536) |
+| **>4** | +13.99c* (n=280) | +9.55c* (n=235) | +10.52c* (n=318) |
+
+`*` = 90% window-clustered CI excludes zero and n_windows >= 30.
+
+### Dev-internal cross-validation (both-halves check)
+
+Dev days split into an **early half (May 15-17)** and a **later half (May 18-20)**. A cell QUALIFIES only if, on BOTH halves, its 90% edge CI excludes zero in the SAME direction with n_windows >= 30.
+
+#### Qualifying cells
+
+| Conditioner = cell | Early edge | Early CI | Early n_win | Later edge | Later CI | Later n_win |
+|--------------------|------------|----------|-------------|------------|----------|-------------|
+| `sigma_bucket = <0.5` | +12.01c | [+7.71c, +16.41c] | 281 | +13.81c | [+10.73c, +16.93c] | 581 |
+| `sigma_bucket = 0.5-1` | +13.36c | [+9.81c, +17.02c] | 361 | +12.40c | [+9.50c, +15.15c] | 759 |
+| `sigma_bucket = 1-2` | +9.48c | [+6.30c, +12.92c] | 424 | +10.49c | [+8.11c, +12.81c] | 957 |
+| `sigma_bucket = 2-4` | +12.92c | [+9.27c, +16.42c] | 350 | +11.24c | [+8.91c, +13.43c] | 821 |
+| `sigma_bucket = >4` | +17.05c | [+12.02c, +22.05c] | 242 | +10.98c | [+8.16c, +13.94c] | 637 |
+| `time_left_bucket = 180-420` | +18.74c | [+15.70c, +21.96c] | 520 | +19.98c | [+17.89c, +22.09c] | 1,152 |
+| `time_left_bucket = 420-660` | +11.55c | [+8.37c, +14.83c] | 520 | +12.04c | [+10.05c, +14.23c] | 1,152 |
+| `time_left_bucket = >660` | +9.05c | [+6.30c, +11.89c] | 520 | +5.88c | [+4.03c, +7.72c] | 1,152 |
+| `drop_bucket = 0` | +12.80c | [+9.53c, +16.01c] | 449 | +11.65c | [+9.69c, +13.78c] | 1,104 |
+| `drop_bucket = 0-10` | +11.83c | [+8.58c, +15.24c] | 442 | +7.60c | [+5.19c, +10.02c] | 848 |
+| `drop_bucket = 10-25` | +11.21c | [+8.18c, +14.24c] | 465 | +7.64c | [+5.42c, +9.84c] | 962 |
+| `drop_bucket = >25` | +14.72c | [+11.34c, +18.11c] | 419 | +19.43c | [+16.89c, +21.98c] | 941 |
+| `cheap_mid_bucket = 0.05-0.15` | +16.04c | [+11.71c, +20.69c] | 313 | +20.94c | [+17.88c, +24.28c] | 733 |
+| `cheap_mid_bucket = 0.15-0.25` | +17.04c | [+12.61c, +21.86c] | 340 | +14.29c | [+11.09c, +17.27c] | 776 |
+| `cheap_mid_bucket = 0.25-0.40` | +12.45c | [+9.04c, +16.01c] | 473 | +7.86c | [+5.49c, +10.29c] | 1,033 |
+| `symbol = btc` | +11.76c | [+7.42c, +16.32c] | 131 | +11.64c | [+8.43c, +15.09c] | 288 |
+| `symbol = eth` | +14.90c | [+10.31c, +19.67c] | 131 | +14.68c | [+11.36c, +17.96c] | 288 |
+| `symbol = sol` | +11.57c | [+6.99c, +16.37c] | 131 | +10.01c | [+6.75c, +13.10c] | 288 |
+| `symbol = xrp` | +11.92c | [+7.25c, +16.51c] | 131 | +10.35c | [+7.26c, +13.64c] | 288 |
+| `vol_tertile = LOW` | +15.18c | [+11.86c, +18.25c] | 424 | +12.68c | [+10.44c, +15.03c] | 899 |
+| `vol_tertile = MED` | +14.12c | [+11.17c, +17.17c] | 469 | +13.30c | [+11.13c, +15.36c] | 1,050 |
+| `vol_tertile = HIGH` | +6.64c | [+3.09c, +10.11c] | 359 | +9.31c | [+7.13c, +11.52c] | 954 |
+| `sigma x drop = sig=<0.5|drop=0` | +12.08c | [+5.15c, +19.42c] | 139 | +16.33c | [+11.79c, +21.04c] | 352 |
+| `sigma x drop = sig=<0.5|drop=0-10` | +9.91c | [+4.10c, +16.07c] | 147 | +11.04c | [+5.48c, +16.41c] | 229 |
+| `sigma x drop = sig=<0.5|drop=10-25` | +12.91c | [+7.35c, +18.68c] | 165 | +8.43c | [+3.57c, +13.05c] | 283 |
+| `sigma x drop = sig=<0.5|drop=>25` | +13.25c | [+6.26c, +20.28c] | 121 | +18.75c | [+13.89c, +23.76c] | 273 |
+| `sigma x drop = sig=0.5-1|drop=0` | +14.79c | [+8.56c, +20.94c] | 162 | +12.28c | [+8.19c, +16.41c] | 397 |
+| `sigma x drop = sig=0.5-1|drop=10-25` | +13.52c | [+7.30c, +19.54c] | 160 | +8.16c | [+3.44c, +12.56c] | 283 |
+| `sigma x drop = sig=0.5-1|drop=>25` | +9.82c | [+2.63c, +17.25c] | 129 | +24.75c | [+19.50c, +29.94c] | 253 |
+| `sigma x drop = sig=1-2|drop=0` | +7.83c | [+2.44c, +13.46c] | 178 | +10.83c | [+7.53c, +14.22c] | 562 |
+| `sigma x drop = sig=1-2|drop=0-10` | +12.60c | [+6.71c, +18.70c] | 184 | +7.77c | [+3.50c, +12.20c] | 277 |
+| `sigma x drop = sig=1-2|drop=>25` | +15.01c | [+9.04c, +21.00c] | 157 | +16.76c | [+12.57c, +20.90c] | 364 |
+| `sigma x drop = sig=2-4|drop=0` | +13.54c | [+7.53c, +19.87c] | 154 | +11.66c | [+8.40c, +15.17c] | 489 |
+| `sigma x drop = sig=2-4|drop=0-10` | +9.66c | [+3.55c, +15.98c] | 150 | +6.42c | [+1.96c, +11.01c] | 259 |
+| `sigma x drop = sig=2-4|drop=10-25` | +13.65c | [+7.87c, +19.64c] | 153 | +9.14c | [+4.93c, +13.37c] | 295 |
+| `sigma x drop = sig=2-4|drop=>25` | +15.23c | [+8.94c, +21.26c] | 143 | +16.67c | [+12.29c, +20.88c] | 310 |
+| `sigma x drop = sig=>4|drop=0` | +15.12c | [+7.46c, +22.37c] | 114 | +8.47c | [+4.91c, +12.03c] | 388 |
+| `sigma x drop = sig=>4|drop=0-10` | +15.46c | [+6.78c, +23.82c] | 93 | +9.24c | [+4.26c, +14.41c] | 209 |
+| `sigma x drop = sig=>4|drop=10-25` | +15.06c | [+5.59c, +24.36c] | 75 | +6.91c | [+1.99c, +11.79c] | 221 |
+| `sigma x drop = sig=>4|drop=>25` | +22.54c | [+14.57c, +31.01c] | 101 | +21.53c | [+16.50c, +26.85c] | 238 |
+
+#### All cells -- both-halves CV detail
+
+| Conditioner = cell | Early edge (CI, n_win) | Later edge (CI, n_win) | n>=30 both | CI excl 0 both | same dir | QUALIFIES |
+|--------------------|------------------------|------------------------|------------|----------------|----------|-----------|
+| `sigma_bucket = <0.5` | +12.01c ([+7.71c,+16.41c], n=281) | +13.81c ([+10.73c,+16.93c], n=581) | yes | yes | yes | **YES** |
+| `sigma_bucket = 0.5-1` | +13.36c ([+9.81c,+17.02c], n=361) | +12.40c ([+9.50c,+15.15c], n=759) | yes | yes | yes | **YES** |
+| `sigma_bucket = 1-2` | +9.48c ([+6.30c,+12.92c], n=424) | +10.49c ([+8.11c,+12.81c], n=957) | yes | yes | yes | **YES** |
+| `sigma_bucket = 2-4` | +12.92c ([+9.27c,+16.42c], n=350) | +11.24c ([+8.91c,+13.43c], n=821) | yes | yes | yes | **YES** |
+| `sigma_bucket = >4` | +17.05c ([+12.02c,+22.05c], n=242) | +10.98c ([+8.16c,+13.94c], n=637) | yes | yes | yes | **YES** |
+| `time_left_bucket = <180` | n/a ([n/a,n/a], n=0) | n/a ([n/a,n/a], n=0) | no | no | no | no |
+| `time_left_bucket = 180-420` | +18.74c ([+15.70c,+21.96c], n=520) | +19.98c ([+17.89c,+22.09c], n=1152) | yes | yes | yes | **YES** |
+| `time_left_bucket = 420-660` | +11.55c ([+8.37c,+14.83c], n=520) | +12.04c ([+10.05c,+14.23c], n=1152) | yes | yes | yes | **YES** |
+| `time_left_bucket = >660` | +9.05c ([+6.30c,+11.89c], n=520) | +5.88c ([+4.03c,+7.72c], n=1152) | yes | yes | yes | **YES** |
+| `drop_bucket = 0` | +12.80c ([+9.53c,+16.01c], n=449) | +11.65c ([+9.69c,+13.78c], n=1104) | yes | yes | yes | **YES** |
+| `drop_bucket = 0-10` | +11.83c ([+8.58c,+15.24c], n=442) | +7.60c ([+5.19c,+10.02c], n=848) | yes | yes | yes | **YES** |
+| `drop_bucket = 10-25` | +11.21c ([+8.18c,+14.24c], n=465) | +7.64c ([+5.42c,+9.84c], n=962) | yes | yes | yes | **YES** |
+| `drop_bucket = >25` | +14.72c ([+11.34c,+18.11c], n=419) | +19.43c ([+16.89c,+21.98c], n=941) | yes | yes | yes | **YES** |
+| `cheap_mid_bucket = 0.05-0.15` | +16.04c ([+11.71c,+20.69c], n=313) | +20.94c ([+17.88c,+24.28c], n=733) | yes | yes | yes | **YES** |
+| `cheap_mid_bucket = 0.15-0.25` | +17.04c ([+12.61c,+21.86c], n=340) | +14.29c ([+11.09c,+17.27c], n=776) | yes | yes | yes | **YES** |
+| `cheap_mid_bucket = 0.25-0.40` | +12.45c ([+9.04c,+16.01c], n=473) | +7.86c ([+5.49c,+10.29c], n=1033) | yes | yes | yes | **YES** |
+| `symbol = btc` | +11.76c ([+7.42c,+16.32c], n=131) | +11.64c ([+8.43c,+15.09c], n=288) | yes | yes | yes | **YES** |
+| `symbol = eth` | +14.90c ([+10.31c,+19.67c], n=131) | +14.68c ([+11.36c,+17.96c], n=288) | yes | yes | yes | **YES** |
+| `symbol = sol` | +11.57c ([+6.99c,+16.37c], n=131) | +10.01c ([+6.75c,+13.10c], n=288) | yes | yes | yes | **YES** |
+| `symbol = xrp` | +11.92c ([+7.25c,+16.51c], n=131) | +10.35c ([+7.26c,+13.64c], n=288) | yes | yes | yes | **YES** |
+| `vol_tertile = LOW` | +15.18c ([+11.86c,+18.25c], n=424) | +12.68c ([+10.44c,+15.03c], n=899) | yes | yes | yes | **YES** |
+| `vol_tertile = MED` | +14.12c ([+11.17c,+17.17c], n=469) | +13.30c ([+11.13c,+15.36c], n=1050) | yes | yes | yes | **YES** |
+| `vol_tertile = HIGH` | +6.64c ([+3.09c,+10.11c], n=359) | +9.31c ([+7.13c,+11.52c], n=954) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=<0.5|drop=0` | +12.08c ([+5.15c,+19.42c], n=139) | +16.33c ([+11.79c,+21.04c], n=352) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=<0.5|drop=0-10` | +9.91c ([+4.10c,+16.07c], n=147) | +11.04c ([+5.48c,+16.41c], n=229) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=<0.5|drop=10-25` | +12.91c ([+7.35c,+18.68c], n=165) | +8.43c ([+3.57c,+13.05c], n=283) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=<0.5|drop=>25` | +13.25c ([+6.26c,+20.28c], n=121) | +18.75c ([+13.89c,+23.76c], n=273) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=0.5-1|drop=0` | +14.79c ([+8.56c,+20.94c], n=162) | +12.28c ([+8.19c,+16.41c], n=397) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=0.5-1|drop=0-10` | +14.85c ([+7.87c,+21.43c], n=130) | +4.15c ([-0.84c,+9.54c], n=229) | yes | no | no | no |
+| `sigma x drop = sig=0.5-1|drop=10-25` | +13.52c ([+7.30c,+19.54c], n=160) | +8.16c ([+3.44c,+12.56c], n=283) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=0.5-1|drop=>25` | +9.82c ([+2.63c,+17.25c], n=129) | +24.75c ([+19.50c,+29.94c], n=253) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=1-2|drop=0` | +7.83c ([+2.44c,+13.46c], n=178) | +10.83c ([+7.53c,+14.22c], n=562) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=1-2|drop=0-10` | +12.60c ([+6.71c,+18.70c], n=184) | +7.77c ([+3.50c,+12.20c], n=277) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=1-2|drop=10-25` | +4.44c ([-0.72c,+9.48c], n=208) | +5.82c ([+1.89c,+9.78c], n=372) | yes | no | no | no |
+| `sigma x drop = sig=1-2|drop=>25` | +15.01c ([+9.04c,+21.00c], n=157) | +16.76c ([+12.57c,+20.90c], n=364) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=2-4|drop=0` | +13.54c ([+7.53c,+19.87c], n=154) | +11.66c ([+8.40c,+15.17c], n=489) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=2-4|drop=0-10` | +9.66c ([+3.55c,+15.98c], n=150) | +6.42c ([+1.96c,+11.01c], n=259) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=2-4|drop=10-25` | +13.65c ([+7.87c,+19.64c], n=153) | +9.14c ([+4.93c,+13.37c], n=295) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=2-4|drop=>25` | +15.23c ([+8.94c,+21.26c], n=143) | +16.67c ([+12.29c,+20.88c], n=310) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=>4|drop=0` | +15.12c ([+7.46c,+22.37c], n=114) | +8.47c ([+4.91c,+12.03c], n=388) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=>4|drop=0-10` | +15.46c ([+6.78c,+23.82c], n=93) | +9.24c ([+4.26c,+14.41c], n=209) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=>4|drop=10-25` | +15.06c ([+5.59c,+24.36c], n=75) | +6.91c ([+1.99c,+11.79c], n=221) | yes | yes | yes | **YES** |
+| `sigma x drop = sig=>4|drop=>25` | +22.54c ([+14.57c,+31.01c], n=101) | +21.53c ([+16.50c,+26.85c], n=238) | yes | yes | yes | **YES** |
+
+### VERDICT
+
+Overall de-biased cheap-side edge across the whole cross-section = **+11.94c** (this matches Task 6b's ~+12c pooled gap). Task 7 asks the sharper question: is that edge **concentrated** in a buyable corner, or **uniform** -- and crucially does it sit at LOW sigma-proximity (a genuine panic overshoot, the H8/H2 thesis) or everywhere (suspicious).
+
+**Sigma-proximity gradient (the core thesis test).**
+- One-dimensional edge by sigma_proximity bucket: <0.5=+13.20c (n_win=862); 0.5-1=+12.71c (n_win=1120); 1-2=+10.18c (n_win=1381); 2-4=+11.75c (n_win=1171); >4=+12.51c (n_win=879).
+- The edge is **roughly UNIFORM across sigma-proximity** (+13.20c at <0.5 vs +12.51c at >4). It does NOT concentrate near coin-flips -- this is the suspicious pattern: a flat edge across decided-ness looks more like a structural longshot/pricing artifact than a panic overshoot. H8's 'edge near coin-flips' thesis is NOT clearly supported.
+
+**Drop gradient.** Edge by cheap_drop_30s bucket: 0=+11.92c (n_win=1553); 0-10=+9.20c (n_win=1290); 10-25=+8.90c (n_win=1427); >25=+17.96c (n_win=1360).
+- A larger 30s drop goes with a larger edge (+17.96c for >25% drops vs +11.92c for no drop) -- consistent with H2: a visible odds drop precedes a reversion. But H2 also warns a drop *alone* is not enough; the cross-tab below tests whether the drop edge needs LOW sigma-proximity to be real.
+
+**sigma_proximity x cheap_drop_30s cross-tab.**
+- Mean edge across the populated drop cells: sigma<0.5 row = +13.23c (4 cells), sigma>4 row = +12.94c (4 cells).
+- Within the sigma<0.5 row the edge spans +10.17c..+17.00c across drop buckets (range +6.83c) -- the drop conditioner still moves the edge materially even within low sigma-proximity.
+
+**Dev-internal cross-validation (both-halves check).**
+- 40 cell(s) QUALIFY: edge CI excludes zero, same direction, n_windows >= 30 on BOTH the early (May 15-17) and later (May 18-20) dev halves. See the qualifying-cells table above.
+- 11 of the qualifying cell(s) sit at LOW sigma-proximity or in the cheap-price tail -- the corner the panic-overshoot thesis predicts.
+
+**Hypothesis verdicts (H2, H6, H8).**
+- **H8 -- NOT clearly supported.** H8 expected the edge in the near-coin-flip / moderate-underdog zone. The sigma-proximity gradient here does not concentrate the edge at low sigma-proximity, so the 'edge lives near coin-flips' part of H8 is not confirmed by the conditioned map.
+- **H2 -- partially testable here, not cleanly supported.** H2 says an odds drop alone does not predict reversion; the spot-move context does. Within the low-sigma row the edge still spans +6.83c across drop buckets, so a drop is NOT redundant once sigma is low -- but neither does it cleanly order the edge (the no-drop and the >25% cells are both high, the middle drop buckets lower). A proper H2 test needs the spot-move split of the drop event study (Task 13-14); the conditioned edge map alone cannot separate noise-drops from signal-drops.
+- **H6 -- SUPPORTED.** Per-symbol edge: btc=+11.68c, eth=+14.75c, sol=+10.49c, xrp=+10.84c. Spread +4.25c (eth highest, sol lowest). Coins are materially different -- the edge map must be computed per-symbol, as H6 predicted.
+
+**Bottom line.** A conditioned cheap-side buyer edge of ~+11.94c exists in the de-biased cross-section, and 40 cell(s) survive the both-halves dev-internal CV. Whether it concentrates at low sigma-proximity is reported above -- it does NOT concentrate sharply near coin-flips, so the panic-overshoot story is at best partial. None of these gross edges are net-of-cost: Task 9 must subtract the ~16-21% taker round-trip before any of this is tradeable.
+
+**Charts:** `docs/research/charts/edge_map_one_dim.png`, `edge_map_sigma_drop.png`, `edge_map_sigma_mid.png`
+
+---
