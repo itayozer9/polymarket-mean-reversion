@@ -28,3 +28,19 @@ async def get_json(session: aiohttp.ClientSession, url: str, params: Optional[di
     async with session.get(url, params=params) as resp:
         resp.raise_for_status()
         return await resp.json()
+
+
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
+)
+async def post_json(session: aiohttp.ClientSession, url: str, payload: Any) -> Any:
+    """POST a JSON body and return the decoded JSON response.
+
+    Same retry policy as ``get_json`` — used for JSON-RPC calls (Polygon RPC).
+    """
+    async with session.post(url, json=payload) as resp:
+        resp.raise_for_status()
+        return await resp.json()
