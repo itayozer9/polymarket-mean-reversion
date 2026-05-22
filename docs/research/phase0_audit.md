@@ -572,7 +572,124 @@ research must use these corrected features, not the arb `proximity_pct_from_move
 function.
 
 ## Task 6 — Fee & cost realism
-_pending_
+
+Script/notes: `research/audit/cost_notes.md`. WebFetch on `https://docs.polymarket.com/trading/fees`
+(2026-05-22) returned full documentation — page was reachable. Spread quantification uses
+BTC + ETH 15m ticks from May 15–21 (206,610 valid ticks after two-sided book filter and
+odds-band filter: `yes_mid ∈ [0.05, 0.35]`).
+
+### 1. Verified fee structure
+
+The Polymarket fee formula is confirmed:
+
+```
+fee = C × feeRate × p × (1 − p)
+```
+
+where C = shares, p = share price. **Crypto markets use feeRate = 0.07 — the highest
+non-zero rate on Polymarket.** Only takers pay; makers are fee-free. This matches
+`config.py::FillParams` exactly.
+
+The fee is symmetric around 50%: a 30¢ trade and a 70¢ trade incur identical dollar
+fees. Fees peak at p = 0.50 (maximum variance); at 50¢, 100 shares → $1.75 fee. In the
+entry-relevant band (5–35¢), fees are lower but still substantial because share counts
+are high (stakes of $10 buy 30–200 shares).
+
+### 2. Spread cost (May tick data, entry band 0.05–0.35)
+
+| Metric | Value |
+|--------|-------|
+| Median spread (BTC/ETH) | **1.00¢** |
+| Mean spread (BTC/ETH) | 1.35¢ |
+| P90 spread | 2.00¢ |
+| Median spread as % of mid | **6.1%** |
+| SOL/XRP median spread | **2.00¢** |
+
+The book is effectively a 1¢-wide quote for BTC/ETH and 2¢-wide for SOL/XRP in the
+5–35¢ band. Because share counts are large (~45–50 shares per $10), even a 1¢ spread
+costs ~$0.45–$0.55 in absolute dollar terms per direction crossed.
+
+### 3. Round-trip cost (per-symbol, $10 stake)
+
+**Cost breakdown at median BTC/ETH entry (ask ≈ 0.21, bid ≈ 0.20):**
+
+| Component | $ | % of $10 stake |
+|-----------|---|----------------|
+| Entry fee (`0.07 × ask × (1−ask) × shares`) | $0.55 | 5.5% |
+| Exit fee (`0.07 × bid × (1−bid) × shares`) | $0.52 | 5.2% |
+| Spread cost (`shares × spread`) | $0.59 | 5.9% |
+| **Total round-trip** | **$1.67** | **16.7%** |
+
+**Per-symbol summary:**
+
+| Symbol | Med ask | Med spread | Med ask depth | Med RT cost |
+|--------|---------|------------|---------------|-------------|
+| BTC | 21.0¢ | 1.0¢ | $137 | 16.4% |
+| ETH | 22.0¢ | 1.0¢ | $41 | 17.0% |
+| SOL | 21.0¢ | 2.0¢ | $14 | 19.5% |
+| XRP | 22.0¢ | 2.0¢ | $14 | 21.0% |
+
+**CONCERN: Total round-trip cost is 16–21% of stake, well above the 8% threshold.**
+(Threshold: 8% of stake. Observed: 16.4–21.0%. All four symbols are flagged.) This is
+driven roughly equally by fees (10–11% of stake) and spread (5–9% of stake). The fee
+component alone exceeds the 8% threshold at typical entry prices in this band.
+
+### 4. Break-even win rates by profit target
+
+For a trade that wins at a given profit target and loses the full stake otherwise:
+
+| Profit target | Net win if correct | Break-even WR |
+|---------------|--------------------|---------------|
+| 15% | **−$0.14** (cost > gross) | **>100% — not viable** |
+| 25% | $0.83 | **92.4%** |
+| 50% | $3.25 | **75.5%** |
+| 75% | $5.70 | **63.7%** |
+| 100% | $8.16 | **55.1%** |
+| 120% | $10.14 | **49.6%** |
+
+The dominant configs in `strategies.yaml` use a 50% profit target. This requires a
+**75.5% win rate** just to break even. The empirical base rate is approximately 50%
+(slightly favoring Down in the entry band). A strategy would need to win 25 additional
+percentage points above the no-skill baseline to be profitable at +50% PT. At +120% PT,
+break-even is 49.6% — barely below 50%, meaning even a marginally-better-than-random
+strategy could survive costs, but wins are rare (entry at 22¢ → exit at 48¢ is a nearly
+4× return, which requires the underlying to nearly reach its maximum UP resolution).
+
+**CONCERN: Low profit-target configs (PT=15%, PT=25%) are unviable on fees + spread
+alone.** A 15% PT trade loses money with 100% certainty regardless of win rate. A 25%
+PT trade requires a 92% win rate — implausible on binary markets with a 50% base rate.
+Phase 5 strategy construction must use PT ≥ 50% for BTC/ETH and PT ≥ 75% for SOL/XRP
+if it is to have any realistic path to profitability.
+
+### 5. Walk-the-book limitation
+
+**Note: cost beyond the top level cannot be measured from this data.** The schema
+carries only one depth level per side (`yes_ask_depth`, `yes_bid_depth`). All cost
+figures above assume the full stake fills at the quoted best ask/bid. In practice:
+
+- For BTC (median ask depth $137): a $10 fill is 7% of the top-of-book depth — safe.
+- For ETH (median $41): $10 is 24% — still within the top level.
+- For SOL/XRP (median $14): a $10 fill consumes 71% of the quoted depth. Any adverse
+  selection or slight underfill would walk the book and incur additional slippage that
+  is invisible in this dataset.
+
+Cross-reference: Task 3 structural limitation (top-of-book only schema). Phase 5
+strategy sizing must treat $14 (SOL/XRP) and $41 (ETH) as practical capacity ceilings,
+not as guarantees that fills occur at quoted prices.
+
+### Summary verdict
+
+| Check | Result |
+|-------|--------|
+| Fee formula verified | PASS (0.07 × p × (1−p) × shares, confirmed by docs) |
+| Taker-only fee | CONFIRMED (makers free; all mean-reversion entries are taker) |
+| Median spread BTC/ETH | 1.00¢ (6.1% of mid) |
+| Median spread SOL/XRP | 2.00¢ (~9% of mid) |
+| Median round-trip cost BTC/ETH | **CONCERN: 16.4–17.0% of stake** |
+| Median round-trip cost SOL/XRP | **CONCERN: 19.5–21.0% of stake** |
+| PT=50% break-even WR | **75.5%** (vs. ~50% base rate) |
+| PT=15% viability | **CONCERN: not viable** (cost exceeds gross profit) |
+| Walk-the-book measurability | NOT MEASURABLE from this data (top-of-book only) |
 
 ## Task 7 — Look-ahead / leakage audit
 _pending_
