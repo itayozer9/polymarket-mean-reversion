@@ -871,3 +871,188 @@ reflected in the live PnL. Phase 5 strategy construction should note that SOL/XR
 ask_depth ~$14) will routinely trigger the 2¢ slippage penalty on $10 fills (14/10 < 2 →
 portion_at_best < 1), adding ~$0.55–0.80 to round-trip cost on top of the fee + spread
 already quantified in Task 6.
+
+## Task 8c — Window-open (t=0) forensics
+
+**Decisive investigation.** The "divergence edge" in `docs/research/divergence_edge.md`
+(`research/analysis/divergence_backtest.py`) reports +$6/trade, 78% win rate, out-of-fold
+stable — with **~74% of trades entering at `seconds_into_window == 0`**. The claimed
+mechanism: at window-open the Polymarket book sits ~50/50 while `move_pct` is already
+non-zero, so the spot-favored side is cheap (~$0.48) yet wins ~95%. If `start_price` were
+the resolution strike (= spot at window-open), `move_pct` at t=0 would be ≈0. It isn't.
+This section settles whether that is a real dislocation or a mislabeling artifact.
+
+Probe: `research/audit/window_open_probe.py` (committed). Data: `data/research/ticks_15m.parquet`
+(2,232 15m windows, 2,000,171 ticks), `data/research/windows.parquet`, plus
+`data/research/ticks_5m.parquet` as an extra coinbase-price source. Investigation only —
+no data or loader was modified.
+
+### Q1 — `start_price` identity
+
+`start_price` is **constant within a window** for 2,228/2,232 windows (99.82%; the 4
+exceptions are windows that lost their first ~445 s of ticks to a collection outage). The
+tick-CSV `start_price` matches the `start_price` in `data/outcomes.csv` for 99.46% of
+slugs. So both fields come from the **same source** — they are not independent.
+
+Note: `data/outcomes.csv` itself is messy — many 15m slugs appear in multiple rows with
+conflicting `end_price`/`outcome` (the discovery-poll close detector fires repeatedly).
+`research/data/loader.py:load_outcomes()` silently keeps the first row. The clean
+per-window outcome in `windows.parquet` (`outcome_up`) was used for all scoring here.
+
+**VERDICT Q1 — OK (with caveat):** `start_price` is a single value per window and the
+tick CSV and `outcomes.csv` agree on it. But agreement does NOT make it the true strike —
+see Q2.
+
+### Q2 — Why is `move_pct ≠ 0` at t=0
+
+At `seconds_into_window == 0`, `move_pct` is **far from zero**: median |move_pct| =
+**0.1425%**, and **81.1%** of windows have |move_pct| > 0.05%. `move_pct` is exactly
+`(coinbase_price − start_price)/start_price·100` at the same tick row (max abs diff
+5e-7) — so a non-zero `move_pct` means **`start_price ≠ coinbase_price` at window-open**.
+
+Searching every 15m tick for a `coinbase_price` that *exactly* float-equals a window's
+`start_price`: the nearest such tick to window-open lands at an **offset of −1700 to
+−1900 s** for 58.2% of windows, and within ±30 s of open for only **2.2%**. That is,
+`start_price` is the **Coinbase spot price sampled roughly 30 minutes BEFORE the window
+opens**.
+
+**Root cause (code-confirmed).** `gamma.list_active_markets` probes candidate slugs for
+`k in (-1, 0, 1, 2)` future window slots — for 15m that is up to **2×900 = 1800 s ahead**.
+`markets/discovery.py` step 2 backfills `start_price` with `coinbase.get_spot()` the
+**first time a slug is seen** (`if m.start_price <= 0:`). A 15m slug first appears as a
+`k=+2` candidate ~1800 s before its window opens, so `start_price` is frozen at the spot
+of ~30 min earlier and never corrected. The −1750 s empirical offset matches the `k=+2`
+lookahead exactly.
+
+**VERDICT Q2 — BUG:** `start_price` is NOT the window-open strike. It is Coinbase spot
+sampled ≈30 minutes early, frozen by the `discovery.py` `k=+2` backfill. `move_pct` at
+t=0 is therefore not "spot vs strike" — it is a **30-minute trailing momentum** measured
+against a stale reference.
+
+### Q3 — Window time structure
+
+15m windows are well-formed: duration `window_end_ts − window_start_ts == 900 s` for
+100% of windows; consecutive windows are **contiguous** (gap == 0) for 99.64% (the rest
+are real collection outages, gap > 0, never gap < 0); **zero overlapping** window pairs.
+Exactly one 15m window is open per symbol at any instant.
+
+**VERDICT Q3 — OK:** Window timing is clean. The artifact is not a windowing error.
+
+### Q4 — Is the t=0 book fresh or carried over
+
+The t=0 order book is **genuinely fresh**. It is byte-identical to the prior window's
+last tick in only **1 / 2,220** contiguous pairs. The t=0 `yes_mid` has median **0.5050**
+with 85.5% of windows in [0.45, 0.55] — a real fresh ~50/50 quote — whereas the prior
+window's last tick sits at extremes (mid ≈ 0 or ≈ 0.9, i.e. already resolved). The t=0
+book is two-sided for 100% of windows; median ask depth ~18 shares (thin but real).
+
+**VERDICT Q4 — OK:** The t=0 book is a fresh, real, two-sided ~50/50 quote on a newly
+opened market. The book is not stale. This is important — it means the artifact is in
+`start_price`, NOT in the book.
+
+### Q5 — Does the claimed edge reconcile with the true outcome
+
+It reproduces exactly. Independently of the backtest code: take t=0 ticks, pick the side
+`move_pct` favors (`move_pct>0 → Up`), look up `outcome_up` from `windows.parquet`:
+
+- favored-side win rate **79.27%**, mean t=0 ask **0.4901**;
+- mean PnL/trade ($10 stake, taker, hold-to-resolution) **+$5.93** — matches the
+  divergence_edge.md headline;
+- by magnitude: |move_pct| in [0.5,∞) → win **95.4%** at ask **0.473**. The
+  "offered ~$0.48, wins ~95%" claim is **confirmed in the data**.
+
+But this win rate is **circular**. `outcome` is scored as `end_price > start_price`
+(holds for **99.73%** of windows — `start_price` IS the resolution reference *in this
+dataset*), and `move_pct@t0 = sign(coinbase@t0 − start_price)`. The t=0 spot is already a
+median 0.143% away from `start_price`, while spot moves only a median 0.107% *during* the
+15-min window. So whichever side of the stale `start_price` spot sits on at t=0, it
+usually still sits on at window-end — a mechanical autocorrelation, not a market edge.
+
+**VERDICT Q5 — CONCERN:** The win rate and PnL reproduce, but they are an arithmetic
+identity: betting `sign(move_pct@t0)` ≈ betting that a 30-min trailing move outlasts the
+next 15 min, scored against the very stale price that defined the move.
+
+### Q6 — Reprice speed (book vs `move_pct`, book vs outcome)
+
+This is the kill shot. Correlation of the t=0..t book against the signal and the outcome:
+
+| sec | corr(yes_mid, move_pct) | corr(yes_mid, outcome_up) | favored-side mid |
+|----:|------------------------:|--------------------------:|-----------------:|
+|   0 | **−0.586** | **−0.407** | 0.481 |
+|   5 | −0.523 | −0.347 | 0.480 |
+|  15 | −0.305 | −0.186 | 0.483 |
+|  30 | −0.118 | −0.020 | 0.486 |
+|  60 | +0.061 | +0.091 | 0.491 |
+| 120 | +0.192 | +0.196 | 0.490 |
+| 300 | +0.261 | +0.229 | 0.479 |
+| 540 | +0.373 | +0.334 | 0.483 |
+
+At t=0 the book is **negatively** correlated (−0.586) with `move_pct` and **negatively**
+correlated (−0.407) with the eventual outcome — i.e. the Polymarket book at window-open
+leans toward the side that, per `outcomes.csv`, *loses*. When the book leans Up
+(`yes_mid > 0.52`) the labelled outcome is Up only ~18% of the time; when it leans Down,
+Up ~78%. The favored-side mid **never reprices** — it stays flat at ~0.48 for the entire
+window. The inversion **decays smoothly to zero by s ≈ 30–45 s** and then goes positive:
+from s ≈ 60 onward the book correctly tracks live spot.
+
+A real, money-traded market cannot systematically lean the wrong way at every window
+open. The decisive cross-check:
+
+- `outcome_up == (end_price > start_price)`: **99.73%** — outcomes are scored on the
+  stale `start_price`.
+- `outcome_up == (end_price > coinbase@t0)`: only **69.06%**.
+- **Book FINAL lean** (last two-sided tick, mean s≈855, just before resolution) agrees
+  with the labelled `outcome` only **68.7%**; `corr(final yes_mid, outcome) = +0.39`.
+
+A real market settling a known binary MUST converge to ≈$0.99/$0.01 in its final minute.
+This book does not — it settles around the **live-spot** 50/50, not the stale-strike
+outcome. The book is pricing `end vs window-open spot`; `outcomes.csv` is scoring
+`end vs spot-from-30-min-ago`. They are two different questions.
+
+**VERDICT Q6 — BUG:** The "slow reprice" is fictitious. The book reprices fine — toward
+live spot — within ~30–60 s. The apparent t=0 dislocation is the −30-min-stale
+`start_price` projected onto a correctly-priced fresh book. The favored side never
+reprices because it is, on average, *not* the side the market (or reality) favors.
+
+### OVERALL VERDICT — DATA ARTIFACT
+
+**TAG: BUG.** The divergence edge is **not real**. It is a `start_price` mislabeling
+artifact, the same family of failure as the Task 3b March bid/ask corruption.
+
+**Exactly what is mislabeled.** `start_price` (and hence `move_pct`, and hence the
+`outcome`/`outcome_up` derived from it) is computed against **Coinbase spot sampled
+≈1750–1800 s — about 30 minutes — before the window actually opens**, because
+`gamma.list_active_markets` discovers slugs `k=+2` slots early and `discovery.py`
+freezes `start_price` at first sight. The true 15-minute resolution strike is the spot
+at `window_start_ts` (≈ `coinbase_price` at the t=0 tick), which is what the Polymarket
+order book correctly prices and converges toward.
+
+**Why the +$6/trade is fake.** The backtest buys the side of the *stale* `start_price`
+that spot sits on at t=0 and scores it against an `outcome` *also* defined by that same
+stale price. Because the 30-min trailing move (median 0.143%) is larger than the genuine
+15-min window move (median 0.107%), `sign(end − start_price)` ≈ `sign(spot@t0 − start_price)`
+mechanically — a tautology, not a tradeable signal. The 79% "win rate" is
+`corr(move_pct, outcome) = 0.556` re-expressed, and both terms are arithmetic functions
+of the same mislabeled `start_price`. The empirical "fair-value surface" in Task 8
+simply re-learned this identity. The flat-surface null and matched-band controls in
+`divergence_edge.md` are internally valid but were all run on the corrupted `outcome`
+label, so they cannot detect the artifact.
+
+It is also **not even a latency race**: at the genuine resolution strike
+(`coinbase@t0`), the book is correct from t=0 and `corr(yes_mid, outcome)` is already
+non-negative by s≈45. There is no real dislocation to race for.
+
+**Consequences / required fixes.**
+- The divergence edge in `docs/research/divergence_edge.md` is **withdrawn** — do not
+  take it to the sealed hold-out.
+- `start_price`, `move_pct`, `outcome`, `outcome_up`, `proximity_pct`, `sigma_proximity`
+  and every feature derived from `start_price` in `ticks_15m.parquet` / `windows.parquet`
+  / `data/outcomes.csv` are contaminated and must NOT be used for outcome scoring or as
+  features. Any Phase-2+ result that consumed `outcome_up` from these files is suspect.
+- Fix `markets/discovery.py`: sample `start_price` (and re-confirm it) **at or after
+  `window_start_ts`**, not on first discovery of a `k>0` future slug. The true strike
+  must be the Coinbase spot at the window-open boundary.
+- Rebuild outcomes against `end_price > spot@window_start_ts` and re-run any backtest
+  that depended on `outcome_up`.
+- 5m windows are likely affected the same way (discovery uses the same `k=+2` probe);
+  audit them before trusting any 5m result.
