@@ -70,16 +70,24 @@ All analyses below were run on the **corrected** dataset (real Polymarket
 outcomes, corrected strikes), development split only (May 15–20), with the
 May 21–22 hold-out sealed and untouched.
 
-| Question | Analysis | Honest result |
+| # | Angle | Honest result |
 |---|---|---|
-| Is the market mispriced? | Phase 2 — calibration | **No.** Well-calibrated; −0.9¢. |
-| Do odds bounce after a drop? | Phase 3 — drop event study | **No.** Odds continue *down* (−6.8% by +5min). Sell-the-bounce loses −$2.20/trade — worse than random entry. |
-| Is the user's patient policy profitable? | Phase 4 — reconstruction | **No.** −$2.19/trade, honestly priced. |
-| Can market-making work here? | Feasibility study | **No-go.** Spread captured ~1¢ < adverse selection ~2.25¢; net ≈ −$0.75/round-trip; inventory into a binary is unhedgeable. |
+| 1 | Calibration — is the market mispriced? | Efficient (−0.9¢). |
+| 2 | Mean-reversion after a drop | Odds continue *down* — momentum, no bounce. |
+| 3 | The user's patient policy, faithfully simulated | −$2.19/trade. |
+| 4 | Market-making feasibility | No-go — adverse selection > spread. |
+| 5 | Within-market (YES/NO) arbitrage | Uncapturable — ~1s flickers, fee-eaten, $5–10 depth. |
+| 6 | Cross-coin lead-lag | No capturable lag — coins move together. |
+| 7 | Maker-execution reframe (comprehensive gross-edge search) | No positive gross edge in any price/drop/time/symbol bucket. |
+| 8 | Intra-window momentum trade | Loses; worse than random entry. |
+| 9 | Time-of-day / liquidity regime | Nothing CV-stable; the old "ASIA" effect did not reappear. |
+| 10 | 5-minute markets | Same as 15m — efficient. |
 
-Three independent angles — static pricing, dynamic post-drop behaviour, and a
-faithful policy simulation — **all agree**: buying the cheap side of these
-markets, however conditioned or timed, does not beat the cost of trading.
+Ten independent analyses — static pricing, dynamic post-drop behaviour, a
+faithful policy simulation, market-making, arbitrage, lead-lag, maker-execution,
+momentum, time-of-day, and a different market timeframe — **all agree**: buying
+the cheap side of these markets, however conditioned or timed, does not beat the
+cost of trading.
 
 A note on what *was* briefly real-looking: σ-proximity (a theoretical
 "how-decided-is-this-market" feature) was found **broken** — markets it rates
@@ -182,3 +190,22 @@ better off:
 - Design + plans: `docs/superpowers/specs/`, `docs/superpowers/plans/`
 - Analysis code: `research/` — pipeline (`lib/`, `features/`, `dataset/`,
   `analysis/`, `audit/`); tests in `tests/research/`.
+
+---
+
+## 9. Post-report leads + forward plan (2026-05-22)
+
+After the initial report, six further hypotheses were tested on corrected data
+with full train/test discipline — within-market arbitrage, cross-coin lead-lag,
+the maker-execution reframe, the intra-window momentum trade, time-of-day, and
+5-minute markets (details: `docs/research/lead_A_arbitrage.md`,
+`lead_B_cross_coin.md`, `lead_D_maker.md`, `lead_CF_final_sweep.md`). **All six
+are clean negatives.** The market is efficient-after-cost across all ten angles.
+
+**Forward plan (chosen):** the only untested ideas need data the bot does not yet
+collect. The collector is being upgraded to capture (1) Chainlink oracle prices
+and update timing — Polymarket resolves on Chainlink, which can lag real spot;
+(2) actual executed trade prints — to see when retail panics; (3) a faster spot
+feed (the current Coinbase feed polls only ~every 14s). The bot then runs for
+3–4 weeks and the oracle-lag and trade-flow hypotheses are tested on genuinely
+new data. Honest prior: low — but it is the one real remaining avenue.
