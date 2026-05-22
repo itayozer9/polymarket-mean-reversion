@@ -30,6 +30,7 @@ from mean_reversion_live.collectors.spot_ws_collector import (
     CoinbaseSpotWsCollector,
     SpotCsvGzAppender,
 )
+from mean_reversion_live.collectors.thread_runner import ThreadedCollectorRunner
 from mean_reversion_live.collectors.tick_writer import CrashSafeCsvGzAppender
 from mean_reversion_live.collectors.trades_writer import TradesCsvGzAppender
 from mean_reversion_live.collectors.ws_collector import WsCollector
@@ -110,8 +111,44 @@ async def amain() -> None:
     trades_writer = TradesCsvGzAppender(settings.data_path / "live_trades")
     spot_ws_writer = SpotCsvGzAppender(settings.data_path / "live_spot")
     chainlink_writer = ChainlinkCsvGzAppender(settings.data_path / "live_chainlink")
-    spot_ws_collector = CoinbaseSpotWsCollector(spot_ws_writer, settings.symbol_list)
     polygon_rpc_url = os.environ.get("POLYGON_RPC_URL", DEFAULT_POLYGON_RPC)
+
+    # Streams 2 + 3 are network collectors that must keep draining their
+    # sockets / hitting their RPC on a steady cadence. The main event loop is
+    # CPU-saturated by the paper engine and starves 1 Hz async tasks for
+    # minutes at a time (the pre-existing macro_dumper has the same problem).
+    # We therefore host the fast-spot WS collector and the Chainlink poll loop
+    # each on their own OS thread + event loop, fully isolated from that
+    # contention. They remain purely additive — separate gzip-CSV writers,
+    # no shared state with the decision path.
+    spot_ws_collector = CoinbaseSpotWsCollector(spot_ws_writer, settings.symbol_list)
+    spot_thread = ThreadedCollectorRunner(
+        name="spot_ws",
+        coro_factory=spot_ws_collector.run,
+        on_stop=spot_ws_collector.stop,
+    )
+
+    _chainlink_stop_holder: dict = {}
+
+    async def _chainlink_coro():
+        # The stop Event must be created inside the collector thread's own
+        # event loop; stash it so the caller thread can set it on shutdown.
+        ev = asyncio.Event()
+        _chainlink_stop_holder["event"] = ev
+        _chainlink_stop_holder["loop"] = asyncio.get_running_loop()
+        await chainlink_loop(chainlink_writer, settings.symbol_list, ev,
+                             rpc_url=polygon_rpc_url)
+
+    def _chainlink_stop():
+        ev = _chainlink_stop_holder.get("event")
+        if ev is not None:
+            ev.set()
+
+    chainlink_thread = ThreadedCollectorRunner(
+        name="chainlink",
+        coro_factory=_chainlink_coro,
+        on_stop=_chainlink_stop,
+    )
 
     # Shared queue
     tick_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -248,22 +285,23 @@ async def amain() -> None:
         asyncio.create_task(heartbeat()),
         asyncio.create_task(disk_watcher()),
         asyncio.create_task(macro_dumper()),
-        # Additive collector-v2 streams (Streams 2 + 3; Stream 1 rides the
-        # existing ws_collector task). Each is best-effort and isolated.
-        asyncio.create_task(spot_ws_collector.run()),
-        asyncio.create_task(
-            chainlink_loop(chainlink_writer, settings.symbol_list, stop,
-                           rpc_url=polygon_rpc_url)
-        ),
     ]
+    # Additive collector-v2 streams. Stream 1 (trade prints) rides the existing
+    # ws_collector task; Streams 2 + 3 run on dedicated threads so the CPU-bound
+    # paper engine on the main loop cannot starve them.
+    spot_thread.start()
+    chainlink_thread.start()
     log.info("combined_running")
 
     await stop.wait()
     log.info("combined_stopping")
     discovery.stop()
     ws_collector.stop()
-    spot_ws_collector.stop()
     engine.stop()
+    # Stop the dedicated-thread collectors (Streams 2 + 3) and join their
+    # threads before closing their writers, so no append races a close().
+    spot_thread.stop()
+    chainlink_thread.stop()
     for t in tasks:
         t.cancel()
     for t in tasks:
