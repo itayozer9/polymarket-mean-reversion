@@ -691,16 +691,24 @@ def build_report(out_path: Optional[Path] = None) -> Path:
     a("> **Bottom line, up front.** (1) The eye-catching 90%+ win rates are "
       "mostly the mechanical result of buying favourites: a leg priced at "
       "0.90 wins ~90% of the time with zero skill. Once the silent losses "
-      "are counted, the directional holders do show a **small positive "
-      "*gross* excess** (~5 percentage points: they win a few points more "
-      "often than their entry odds implied) — but that ~5c gross edge is far "
-      "below the 16–21% round-trip taker cost, so it is **not a profitable, "
-      "cost-surviving edge** (consistent with the prior backtest). (2) No — "
-      "the gross edge is too small to clear costs even for the leader, and "
-      "on 15m markets the copy latency makes a copy strictly worse than the "
-      "leader. (3) The wallets cluster heavily on the same markets, but the "
-      "pattern is a **common public signal** (the crypto spot price), not a "
-      "copy-trading ring with a consistent leader.")
+      "are counted, the leaderboard wallets show a small positive "
+      "*in-sample* excess (~+5c — they win a few points more often than "
+      "their entry odds implied). But that ~+5c is an **in-sample, "
+      "survivorship-confounded** number: these 239 wallets were *selected* "
+      "for having made money, so their realized trades won by construction. "
+      "The survivorship-FREE estimate — the Phase 3 backtest that buys "
+      "every favourite across winners *and* losers "
+      "(`docs/research/leaderboard_strategy_backtest.md`) — finds the "
+      "favourite's true excess is only **+1.5c on 15m / +0.2c on 5m**. "
+      "Against the correct **one-way** entry cost (~3–3.5c taker; no exit "
+      "fee — hold-to-resolution never sells) that is a **net loss**. The "
+      "~3.5c gap between the probe's +5c and Phase 3's +1.5c is the "
+      "survivorship premium, not skill. (2) No — there is no "
+      "survivorship-free evidence of edge to copy, and on fast 15m/5m "
+      "markets a post-settlement copy buys at worse odds than the leader. "
+      "(3) The wallets cluster heavily on the same markets, but the "
+      "pattern is a **common public signal** (the crypto spot price), not "
+      "a copy-trading ring with a consistent leader.")
     a("")
 
     # ===== PART A =========================================================
@@ -813,10 +821,17 @@ def build_report(out_path: Optional[Path] = None) -> Path:
           "wallets win a few points more often than their entry odds "
           "implied. On the meaningful-sample subset the mean per-wallet "
           f"excess is ~{_fmt_pct(ex_big.mean(), 0)} and "
-          f"~{(ex_big > 0).mean() * 100:.0f}% of wallets are positive. This "
-          "is a **small, real, gross edge** — not zero. The decisive "
-          "question (Part C) is whether ~5–9c of gross excess can survive "
-          "the 16–21% round-trip taker cost. It cannot.")
+          f"~{(ex_big > 0).mean() * 100:.0f}% of wallets are positive. **But "
+          "this is an *in-sample* number and cannot be read as edge.** "
+          "These 239 wallets were *selected* by the leaderboard for having "
+          "made money — their realized trades won by construction. A "
+          "positive in-sample excess is therefore *exactly what selection "
+          "produces*, with or without genuine skill. The trustworthy, "
+          "survivorship-free figure is the Phase 3 backtest's "
+          "(`docs/research/leaderboard_strategy_backtest.md`) — see the "
+          "reconciliation below — and it is much smaller. Whether ~+5c "
+          "survives cost is *not* the decisive question; whether the +5c "
+          "is real at all is.")
         a("")
 
         # concrete examples — high WR / high odds
@@ -851,42 +866,73 @@ def build_report(out_path: Optional[Path] = None) -> Path:
               f"{_fmt_p(r['vwap_entry_odds'])} | "
               f"{_fmt_pct(r['excess_win_rate'], 1)} | {int(r['n_markets'])} |")
         a("")
-        a("A handful of wallets show a genuinely large excess (20%+). These "
-          "are the ones worth scrutiny — but note (a) they trade at low "
-          "entry odds, where a few lucky longshots move the number a lot, "
-          "and (b) even a 20% gross excess barely clears a 16–21% "
-          "round-trip cost, with no margin and no certainty it persists.")
+        a("A handful of wallets show a genuinely large in-sample excess "
+          "(20%+). These look like the best edge candidates — but they are "
+          "the most survivorship-confounded of all: they trade at **low "
+          "entry odds**, where a few lucky longshot wins move the number a "
+          "lot, and a wallet that got lucky on longshots is exactly the "
+          "kind of wallet a cumulative-PnL leaderboard promotes. Their "
+          "in-sample excess is not evidence their longshot calls were "
+          "skilled — only a forward, out-of-sample test (below) could "
+          "tell.")
         a("")
 
         # persistence test
         eligible = part_a[(part_a["early_n"] >= 30)
                           & (part_a["late_n"] >= 30)]
+        n_eligible = len(eligible)
+        # wallets with positive OVERALL excess — the correct conditioning
+        # set, since "both halves positive" implies "overall positive".
+        elig_pos = eligible[eligible["excess_win_rate"] > 0]
+        n_elig_pos = len(elig_pos)
         n_persist = int(part_a["persistent_positive"].sum())
+        pass_rate_pos = (n_persist / n_elig_pos if n_elig_pos else float("nan"))
         a("### Persistence test — do they beat their odds in BOTH halves?")
         a("")
         a("Variance alone produces plenty of positive-excess wallets in any "
-          "single sample. A *genuinely skilled* wallet beats its entry odds "
-          "in **both** halves of its own history. Each wallet's directional "
-          "history is split in two by time (window-start median); the "
-          "per-slug excess is recomputed in each half; a wallet passes only "
-          "if it is positive-excess in **both** halves with a meaningful "
-          "sample (>=30 markets/half).")
+          "single sample. The idea of a persistence test: a *genuinely "
+          "skilled* wallet beats its entry odds in **both** halves of its "
+          "own history. Each wallet's directional history is split in two by "
+          "time (window-start median); the per-slug excess is recomputed in "
+          "each half; a wallet passes only if it is positive-excess in "
+          "**both** halves with a meaningful sample (>=30 markets/half).")
         a("")
         a(f"- Wallets with >=30 single-sided directional markets in **each** "
-          f"half: {len(eligible)}")
+          f"half: {n_eligible}")
+        a(f"- Of those, with positive **overall** excess: {n_elig_pos}")
         a(f"- Of those, positive excess in **both** halves: **{n_persist}** "
-          + (f"({n_persist / len(eligible) * 100:.0f}%)"
-             if len(eligible) else ""))
+          + (f"({pass_rate_pos * 100:.0f}% of the overall-positive "
+             "wallets)" if n_elig_pos else ""))
         a("")
-        a("A pure zero-edge population would pass at ~25% (independent "
-          "50/50 in each half). The observed pass rate is "
-          + (f"**{n_persist / len(eligible) * 100:.0f}%**"
-             if len(eligible) else "n/a")
-          + " — meaningfully above chance. That says the small gross excess "
-          "is **not pure noise**: there is a weak but real persistent "
-          "tendency for these wallets to beat their entry odds. It does "
-          "**not** say that tendency is large enough to be profitable after "
-          "cost (it is not — see Part C).")
+        a("**The baseline for this test is ~50%, not ~25% — and that "
+          "changes the reading.** A subtle but decisive point: these "
+          "wallets are *already* conditioned on being leaderboard winners, "
+          "so the relevant population is the overall-positive wallets, and "
+          "a wallet with positive overall excess has `half1 + half2 > 0`. "
+          "For two i.i.d. mean-zero (zero-skill) halves, "
+          "`P(both halves > 0 | sum > 0) = 0.25 / 0.50 = 0.50` — the two "
+          "halves are positively co-conditioned by the very fact that their "
+          "sum is positive. So a **pure zero-skill** population, once "
+          "filtered to overall-winners, *already* passes the both-halves "
+          "test about **50%** of the time. (An unconditioned zero-skill "
+          "population passes ~25% — but that is the wrong baseline here, "
+          "because the leaderboard pre-selection has already conditioned on "
+          "winning.)")
+        a("")
+        a("The observed pass rate is "
+          + (f"**{pass_rate_pos * 100:.0f}%**" if n_elig_pos else "n/a")
+          + f" ({n_persist}/{n_elig_pos} overall-positive wallets) — above "
+          "the corrected ~50% zero-skill baseline, but only **moderately** "
+          "so, and on a small sample (" + f"{n_elig_pos}"
+          " wallets). This is **weak evidence** of a persistent component, "
+          "not the strong signal a comparison against the wrong ~25% "
+          "baseline would have suggested. And note what the test can and "
+          "cannot do: even passing both halves is still an *in-sample* "
+          "statement — both halves are drawn from the same "
+          "leaderboard-selected history, so the test cannot separate "
+          "persistent *skill* from a wallet that was simply lucky across "
+          "its whole (selected) record. The persistence test does **not** "
+          "escape the survivorship problem.")
         a("")
         if n_persist:
             a("The strongest persistent wallets (positive in both halves, "
@@ -930,30 +976,112 @@ def build_report(out_path: Optional[Path] = None) -> Path:
       f"**{_fmt_pct(pooled['pooled_excess_cnt'], 1)}** | "
       f"**{_fmt_pct(pooled['pooled_excess_usdc'], 1)}** |")
     a("")
-    a("The pooled excess is **small and positive** — about +5 percentage "
-      "points either way. The market is close to calibrated: across the "
-      "whole directional-holder population the favourites win at roughly "
-      "(very slightly above) the rate their price implied. This is broadly "
-      "consistent with the prior research "
-      "(`docs/research/leaderboard_mm_verdict.md` §4: realized win rate "
-      "tracks entry odds, gross mean ~+1.5c on 15m) — the present analysis "
-      "finds a somewhat larger gross figure (~+5c) because it counts the "
-      "silent losses correctly and pools the leaderboard's *winning* "
-      "wallets, who are a positively-selected slice. **Crucially: +5c "
-      "gross is far below the 16–21% round-trip taker cost.** A gross "
-      "edge that small is wiped out — and then some — by trading frictions.")
+    a("The pooled in-sample excess is **small and positive** — about +5 "
+      "percentage points either way. Across the whole directional-holder "
+      "population, on the trades the leaderboard recorded, the favourites "
+      "won about 5c more often than their entry price implied. That number "
+      "is real *as a description of these wallets' realized history* — but, "
+      "as the next subsection makes precise, it is an **in-sample, "
+      "survivorship-confounded** figure and is **not** a measurement of "
+      "edge.")
+    a("")
+
+    # ---- Phase 3 reconciliation -----------------------------------------
+    a("### Reconciling the +5c with the Phase 3 backtest — the survivorship "
+      "premium")
+    a("")
+    a("There are two estimates of the favourite's excess win rate, and they "
+      "disagree by design:")
+    a("")
+    a("| Estimate | What it measures | Favourite excess |")
+    a("|---|---|---:|")
+    a("| **This probe (Part A)** | Excess on the *realized trades of the "
+      "239 leaderboard wallets* — wallets selected for cumulative profit | "
+      "**~+5c** (in-sample) |")
+    a("| **Phase 3 backtest** "
+      "(`docs/research/leaderboard_strategy_backtest.md`) | Excess from "
+      "buying **every** favourite across **every** market — winners *and* "
+      "losers, no wallet selection | **+1.5c (15m) / +0.2c (5m)** |")
+    a("")
+    a("The Phase 3 number is the **survivorship-free** one: it bought the "
+      "favourite in all ~1,676 15m and ~5,018 5m windows of the tick "
+      "dataset, so it sees the full population — every losing favourite "
+      "bet, not just the bets of wallets who came out ahead. It found the "
+      "favourite side is **essentially calibrated**: realized win rate "
+      "tracks entry odds, mean (realized − entry) = **+1.5c on 15m, +0.2c "
+      "on 5m**.")
+    a("")
+    a("This probe's **+5c** is measured on a *selected* sample — the 239 "
+      "wallets are, by construction, the top of the leaderboard's "
+      "cumulative-PnL ranking, so their recorded trades won more often than "
+      "a random trader's would. The gap is the arithmetic of selection:")
+    a("")
+    a("> **probe +5c − Phase 3 +1.5c ≈ +3.5c is the survivorship "
+      "premium** — the part of the probe's excess attributable purely to "
+      "having picked the wallets *on their wins*. It is not demonstrated "
+      "skill.")
+    a("")
+    a("The trustworthy estimate of the favourite's true gross excess is "
+      "therefore Phase 3's **+1.5c on 15m** (and +0.2c on 5m), not this "
+      "probe's +5c. The probe's job was to count the silent losses "
+      "honestly and characterise the wallets; it cannot, on selected data, "
+      "measure edge — and it does not claim to.")
+    a("")
+
+    # ---- the cost model -------------------------------------------------
+    a("### The cost the edge must clear — one-way, not round-trip")
+    a("")
+    a("Buy-favourite-**hold-to-resolution** never sells: the position "
+      "settles at the 0/1 outcome, and settlement is not a trade — it "
+      "carries no fee and no spread. The cost is therefore **one-way** "
+      "(entry only), not a round-trip:")
+    a("")
+    a("- **Taker entry fee:** `0.07 · p · (1−p)` per share — ~1.4c at a "
+      "typical favourite price p≈0.72.")
+    a("- **Entry spread crossed:** ~1.5–2c per share on these books.")
+    a("- **Total one-way taker cost: ~3–3.5c per share.** A maker pays "
+      "**~0** — no fee, and fills at the bid rather than crossing the "
+      "spread (subject to adverse selection — see Phase 3).")
+    a("")
+    a("(An earlier draft of this report wrongly used a *round-trip* "
+      "16–21% cost. That figure includes an exit leg and applies to a "
+      "buy-then-**sell** strategy — it does not apply to hold-to-"
+      "resolution, which has no exit trade. The Phase 3 backtest applies "
+      "exactly the one-way cost above: a taker entry fee and the crossed "
+      "spread, and explicitly **no exit fee**.)")
+    a("")
+    a("Set the trustworthy +1.5c gross (15m) against the ~3–3.5c one-way "
+      "taker cost: **+1.5c − 3.5c ≈ −2c per share net** — a loss. That is "
+      "why the Phase 3 backtest nets **−$0.26/trade** on the 15m primary "
+      "band as a taker. On 5m it is worse (+0.2c gross, −$0.55/trade). A "
+      "maker pays ~0 cost, so a maker is roughly *breakeven* on the +1.5c "
+      "gross — but Phase 3 shows the maker is adversely selected (filled "
+      "because the side is moving), so the 0-fee bet is still a 0-EV bet "
+      "on calibrated odds; the maker CI straddles zero, never clears it.")
+    a("")
+    a("Note the implication, stated honestly: **if the probe's +5c had "
+      "been a real edge, it *would* clear the ~3.5c one-way cost** (+5c − "
+      "3.5c ≈ +1.5c net). The conclusion does **not** rest on \"cost kills "
+      "it.\" It rests on the +5c not being real — it is in-sample and "
+      "survivorship-confounded, and the survivorship-free +1.5c does not "
+      "clear cost.")
     a("")
     a("**Answer to Q1.** The directional holders' headline 90%+ win rates "
       "are *mostly* the mechanical result of buying favourites — a leg "
-      "priced at 0.90 wins ~90% of the time with zero skill. Once the "
-      "silent losses are counted honestly, there is a **small, real, "
-      "positive gross excess of ~5 percentage points** (they win a few "
-      "points more often than their entry odds implied), and it is weakly "
-      "persistent across time. But ~5c of gross edge does **not** survive "
-      "the 16–21% round-trip cost of actually trading — so it is a "
-      "*statistical* edge, not a *bankable* one. They do not win \"so "
-      "well\"; they win a little better than their odds, and not by enough "
-      "to be profitable after cost.")
+      "priced at 0.90 wins ~90% of the time with zero skill. Counting the "
+      "silent losses honestly, their realized trades show a small positive "
+      "excess (~+5c) — but that is an **in-sample number on a "
+      "leaderboard-selected sample** and cannot be read as skill. The "
+      "survivorship-free estimate (Phase 3, which sees winners *and* "
+      "losers) puts the favourite's true gross excess at only **+1.5c on "
+      "15m / +0.2c on 5m** — and against the ~3–3.5c one-way taker entry "
+      "cost that is a **net loss**. We **cannot tell from this data "
+      "whether any individual wallet has genuine skill** — every figure in "
+      "Part A is in-sample. What we can say: the survivorship-free evidence "
+      "shows no bankable directional edge. They do not win \"so well\"; "
+      "they buy favourites, the favourites win at roughly their odds, and "
+      "the leaderboard then shows us only the wallets for whom that "
+      "coin-flip-at-fair-odds came up heads.")
     a("")
 
     # ===== PART B =========================================================
