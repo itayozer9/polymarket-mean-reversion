@@ -61,7 +61,7 @@ See `strategies.yaml`. Initial set (week 1):
 | `relaxed_v1` | Exploratory variant — wider band, no daily cap | enabled |
 | `cfg_5m_control` | 5m baseline — expected to lose (engine sanity check) | enabled |
 
-To add a strategy: edit `strategies.yaml`, send `SIGHUP` to the combined process (or restart).
+To add or toggle a strategy: edit `strategies.yaml` and **restart** the combined process (`./scripts/stop_all.sh && ./scripts/start_all.sh`). The bot reads the YAML once at boot — there is no SIGHUP / hot-reload handler in the source, so changes only take effect on the next start.
 
 ---
 

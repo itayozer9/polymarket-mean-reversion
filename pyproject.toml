@@ -24,6 +24,12 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+sweep_v2 = [
+    "optuna>=3.5",
+    "cma>=3.3",
+    "lightgbm>=4.0",
+    "shap>=0.44",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -121,7 +121,11 @@ async def amain() -> None:
     # each on their own OS thread + event loop, fully isolated from that
     # contention. They remain purely additive — separate gzip-CSV writers,
     # no shared state with the decision path.
-    spot_ws_collector = CoinbaseSpotWsCollector(spot_ws_writer, settings.symbol_list)
+    # Pass the shared spot_cache so the fast WS price feeds the engine's
+    # coinbase_price/move_pct (fresh), not just the research CSV. This makes the
+    # late-window determinism strategy faithful (it keys on distance-to-strike).
+    spot_ws_collector = CoinbaseSpotWsCollector(spot_ws_writer, settings.symbol_list,
+                                                spot_cache=spot_cache)
     spot_thread = ThreadedCollectorRunner(
         name="spot_ws",
         coro_factory=spot_ws_collector.run,
@@ -165,6 +169,11 @@ async def amain() -> None:
             outcome_writer.append(market, end_price)
         except Exception as e:
             log.warning("outcome_write_failed", slug=market.slug, err=str(e))
+        # Settle any open determinism positions for this window at the true outcome.
+        try:
+            engine.settle_window(market, end_price)
+        except Exception as e:
+            log.warning("det_settle_window_failed", slug=market.slug, err=str(e))
 
     discovery = MarketDiscovery(on_subscribe=on_subscribe, on_close=on_close)
     ws_collector = WsCollector(

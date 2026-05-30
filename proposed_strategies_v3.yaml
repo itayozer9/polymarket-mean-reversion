@@ -1,0 +1,61 @@
+strategies:
+- id: sweep_v2_trail_v2_01_act100_lock30
+  config_id: 1be3e4e39192
+  enabled: false
+  source: sweep_v2_trail_v2
+  trail_v2_staircase:
+  - - 100
+    - 30
+  stress_pass: true
+  walk_forward_median_pnl: 47.196302616772215
+  march_pnl_caveat_data_corrupt: 498.74696170781635
+  config: &id001
+    entry.side: BOTH
+    entry.entry_price_min: 0.09031478099581848
+    entry.entry_price_max: 0.3189990074178029
+    entry.drop_magnitude_pct: 15.038191127543117
+    entry.drop_window_sec: 296
+    entry.min_time_left_sec: 223
+    entry.proximity_max_pct: 93.17352957482386
+    entry.min_seconds_into_window: 94
+    exit.profit_target_pct: 269.98340725575076
+    exit.stop_loss_pct: null
+    exit.max_hold_sec: 537
+    exit.trailing_stop_pct: null
+    filter.min_book_depth_usd: 76.45258989284731
+    filter.max_spread: 0.02808037554116574
+    filter.book_imbalance_min: null
+    filter.vol_regime: ALL
+    filter.time_of_day: ASIA
+    human.signal_skip_prob: 0.028915951978647072
+    human.daily_trade_cap: 20
+    human.concurrent_position_cap: null
+    fill.fee_rate: 0.07
+    fill.reject_prob: 0.09016200067936624
+    filter_v2.use_macro_stress: false
+    filter_v2.macro_stress_min_symbols: 3
+    filter_v2.use_rv_regime: true
+    filter_v2.rv_regime: HIGH
+    filter_v2.use_depth_imbalance: true
+    filter_v2.depth_imbalance_min: 0.4382232787751126
+    filter_v2.use_btc_lead: false
+    filter_v2.btc_lead_pct_min: 0.6552021491782616
+    filter_v2.use_spread_zscore: false
+    filter_v2.spread_zscore_max: -1.037497498997882
+    filter_v2.use_expiry_bucket: false
+    filter_v2.expiry_bucket: MID
+- id: sweep_v2_trail_v2_02_act50_40__act100_25__act200_15
+  config_id: 1be3e4e39192
+  enabled: false
+  source: sweep_v2_trail_v2
+  trail_v2_staircase:
+  - - 50
+    - 40
+  - - 100
+    - 25
+  - - 200
+    - 15
+  stress_pass: true
+  walk_forward_median_pnl: 25.51981728377981
+  march_pnl_caveat_data_corrupt: 302.24253594061366
+  config: *id001

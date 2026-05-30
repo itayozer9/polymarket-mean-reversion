@@ -160,11 +160,18 @@ class CoinbaseSpotWsCollector:
     quiet; faster updates are written as they arrive.
     """
 
-    def __init__(self, writer: SpotCsvGzAppender, symbols: List[str], min_interval_sec: float = 1.0):
+    def __init__(self, writer: SpotCsvGzAppender, symbols: List[str], min_interval_sec: float = 1.0,
+                 spot_cache=None):
         self._writer = writer
         self._symbols = [s for s in symbols if s in _SYMBOL_TO_PRODUCT]
         self._products = [_SYMBOL_TO_PRODUCT[s] for s in self._symbols]
         self._min_interval = min_interval_sec
+        # Optional shared SpotPriceCache. When provided, every fresh ticker also
+        # updates it, so the engine's tick `coinbase_price`/`move_pct` track the
+        # real-time WS price instead of the stale ~14s REST poll. This is what
+        # makes the late-window determinism strategy faithful in the live engine
+        # (it keys on distance-to-strike, which needs the fresh spot).
+        self._spot_cache = spot_cache
         # The stop Event is created lazily inside run(), on whatever event loop
         # actually drives this collector. Creating it in __init__ would bind it
         # to the constructing thread's loop; this collector is hosted on its
@@ -284,6 +291,16 @@ class CoinbaseSpotWsCollector:
                 continue
             symbol = str(row["symbol"])
             self._latest[symbol] = row
+            # Feed the shared cache so the engine's coinbase_price/move_pct are
+            # fresh (the determinism strategy depends on this). Atomic dict set;
+            # safe to call from this collector's own thread.
+            if self._spot_cache is not None:
+                px = row.get("price")
+                if isinstance(px, (int, float)) and px > 0:
+                    try:
+                        self._spot_cache.set(symbol, float(px))
+                    except Exception:
+                        pass
             now_ms = int(time.time() * 1000)
             last = self._last_write_ms.get(symbol, 0)
             # Write immediately if it's been >= min_interval since the last

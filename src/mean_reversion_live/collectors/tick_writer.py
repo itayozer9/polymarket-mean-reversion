@@ -1,12 +1,31 @@
 """Crash-safe gzip CSV appender. One file per (symbol, date).
 
-We open append-mode gzip files and fsync periodically. On date rollover the
-writer opens a new file for the new date. Header is written on new files only.
+Segment flushing
+----------------
+Every `fsync_every_n_rows` rows we close the current gzip member and reopen
+the file in append mode. Each closed segment is a complete gzip member with
+its CRC32 + ISIZE trailer; the next batch starts a fresh member. The file is
+therefore a concatenation of complete gzip members — readable mid-run by
+`gunzip` and by Python's `gzip.open` (which iterates members natively).
+
+This matters for two reasons:
+  1. Mid-run analysis (e.g. the trail-v2 forward research) can read up to the
+     last committed segment without restarting the bot.
+  2. If the process is SIGKILL'd (stop_all.sh sends SIGTERM then SIGKILL after
+     30s; the freeze cycle can stall shutdown past that window), at most the
+     last fsync segment is lost. Without segment flushing, the open gzip member
+     has only a deflate sync-flush marker — no trailer — and the next bot
+     process's append-mode open appends a new gzip header right after it,
+     producing a malformed concatenated stream that errors with "invalid block
+     type" mid-read. This bug ate ~16h of btc tick data on 2026-05-23.
+
+Mirrors the proven pattern in `l2_writer` and `macro_writer`. See
+`tests/test_tick_writer.py::test_writer_simulated_sigkill_then_restart` for the
+regression test that covers the failure mode.
 """
 from __future__ import annotations
 import datetime as dt
 import gzip
-import os
 import threading
 from pathlib import Path
 from typing import Dict, List
@@ -66,10 +85,9 @@ class CrashSafeCsvGzAppender:
     def _open(self, symbol: str, date_str: str) -> gzip.GzipFile:
         path = self._base / f"{symbol}_{date_str}.csv.gz"
         is_new = not path.exists() or path.stat().st_size == 0
-        # Open in append-binary mode via gzip.
-        # NOTE: using append mode 'ab' keeps appending to the same gzip member
-        # but Python's gzip can read multi-member streams. Our loader already
-        # handles corrupt-tail cases tolerantly.
+        # Append mode: starts a new gzip member appended to the file. With
+        # segment flushing (close + reopen every fsync_every_n_rows), the file
+        # ends up as a sequence of complete gzip members — readable mid-run.
         f = gzip.open(str(path), mode="ab", compresslevel=6)
         if is_new:
             header = (",".join(TICK_COLUMNS) + "\n").encode("utf-8")
@@ -96,12 +114,19 @@ class CrashSafeCsvGzAppender:
             f.write(line)
             self._rows_since_fsync[key] += 1
             if self._rows_since_fsync[key] >= self._fsync_every:
+                # Close + reopen so each segment is a complete gzip member
+                # (with proper CRC32 + ISIZE trailer). Multi-member gzip
+                # streams are readable by `gunzip` and Python's gzip module;
+                # an open append-mode member without a trailer reads as
+                # "Compressed file ended before the end-of-stream marker"
+                # mid-write, and stitches malformed bytes if another writer
+                # appends after a SIGKILL. See module docstring.
                 try:
-                    f.flush()
-                    if hasattr(f, "fileobj") and f.fileobj is not None:
-                        os.fsync(f.fileobj.fileno())
-                except (OSError, AttributeError):
+                    f.close()
+                except Exception:
                     pass
+                f = self._open(symbol, key[1])
+                self._files[key] = f
                 self._rows_since_fsync[key] = 0
 
     def close(self) -> None:

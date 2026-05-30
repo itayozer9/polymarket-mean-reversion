@@ -115,6 +115,34 @@ class PaperEngine:
                 s.record_trade(trade)
                 s.persist_portfolio()
 
+    def settle_window(self, market, end_price) -> None:
+        """Settle any open DETERMINISM positions for a closed window at the TRUE
+        outcome (end_price vs strike, tie -> Up). Called from the runner's
+        on_close. Mean-reversion strategies are unaffected (they settle on-tick).
+        """
+        start_price = float(getattr(market, "start_price", 0.0) or 0.0)
+        slug = getattr(market, "slug", None)
+        if slug is None or end_price is None or start_price <= 0:
+            return
+        outcome_up = float(end_price) >= start_price   # tie -> Up (settlement rule)
+        ts = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+        for s in self.strategies:
+            st = s.states.get(slug)
+            # hold-to-resolution strategies expose settle(); mean-reversion does not
+            if st is None or not hasattr(st, "settle"):
+                continue
+            try:
+                trade = st.settle(outcome_up, ts, s.portfolio)
+            except Exception as e:
+                log.warning("det_settle_error", strategy=s.id, slug=slug, err=str(e))
+                continue
+            if trade is not None:
+                log.info("det_settled", strategy=s.id, slug=slug,
+                         side=trade.side, pnl=round(trade.pnl, 3), won=(trade.exit_price > 0))
+                s.record_trade(trade)
+                s.record_trade_detailed(trade, getattr(st, "last_ctx", None) or {})
+                s.persist_portfolio()
+
     def _maybe_snapshot(self) -> None:
         """Once an hour, write a portfolio snapshot for each strategy."""
         now = dt.datetime.now(dt.timezone.utc)

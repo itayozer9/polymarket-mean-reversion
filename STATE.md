@@ -189,3 +189,118 @@ project (new data collector, new study). Presented as a decision for the owner.
 **Recommendation:** NO-GO on market-making and NO-GO on directional strategies
 for 5m/15m crypto Up/Down. No edge for a small patient bot in the markets
 studied. See `docs/research/leaderboard_mm_verdict.md` §7.
+
+---
+
+## 2026-05-29 — Edge hunt on new-data feeds: FIRST real edge found
+
+Full forensic + research pass using the L2/trade-tape/fast-spot/Chainlink feeds
+live since 2026-05-22 (the doors prior research said were untested). See
+`docs/research/edge_hunt_synthesis.md` and per-phase docs.
+
+**Phase 0 — trustworthy harness (DONE, null-test PASS ✅):**
+- Settlement feed CORRECTED: these markets resolve on the **Chainlink Data Stream**,
+  not Coinbase (prior Task-4 verdict was an artifact of no Chainlink data then).
+  Ties resolve **Up**. No liquidity-rewards pool exists. (`phase0a_settlement_feed.md`)
+- Joined dataset `data/research/joined_15m.parquet` (2.2M ticks, 2456 windows,
+  clean window 05-23→29) + realistic fill/cost simulator `research/sim/fills_v2.py`
+  (walks real L2; taker 0.07·p(1−p); hold-to-resolution = one-way cost) + null-test
+  gate (`research/sim/null_test.py`). Harness re-confirms the market is calibrated.
+
+**The finding — book LAGS spot → momentum/determinism edge (NOT mean-reversion):**
+- **Phase 1 (PRIMARY): late-window determinism pickoff.** Last 60s, spot ≥5bps from
+  strike, buy favourite at ask ≤0.90, hold to resolution. **OOS hold-out: +$1.68/
+  trade, 91% WR, CI [+0.97,+2.39], ~$73/day.** Survives 5s latency, both-halves CV,
+  all 4 symbols. (`oracle_mechanics.py`, `oracle_mechanics.md`)
+- **Phase 2 (secondary): mid-window stale-quote pickoff**, jump-gated. OOS +$2.7–3.7/
+  trade, CI excl. 0, but higher-variance/outlier-sensitive. (`stale_quote.md`)
+- **Phase 3: maker = NO-GO** (real round-trip −0.6 to −1.8¢; no rewards; inventory
+  risk). (`maker_real.md`)
+- **Phase 4: dip-reversion (user's original thesis) = NEGATIVE** — dipped side is
+  calibrated; spot-flat filter (never testable before the proximity-bug fix) doesn't
+  help. The "buy the dip" intuition is backwards here. (`trade_flow.md`)
+
+**Next — Phase 5 (harden):** gauntlet (multiple-testing correction, cost-stress,
+larger re-sealed hold-out); build engine support for the determinism strategy (new
+type: late-window favourite-buy + hold-to-resolution, NOT the mean-reversion
+machine); forward paper on unseen windows; then small live test ($50–100, $10/trade,
+daily cap). Caveats: 7 clean days only; fat left tail; capacity ~$10–50/trade.
+
+## 2026-05-29 (cont.) — Phase 5 gauntlet PASS + forward validation (+ a fake-positive caught)
+
+**Gauntlet on the Phase 1 determinism edge — PASS** (`docs/research/gauntlet_verdict.md`):
+cost-stress combined worst-case +$1.28/tr CI[+0.82,+1.74]; per-regime both green;
+calibrated multiple-testing null p<0.0001 for the robust rule (dist≥5/ask≤0.90,
+N=333). The sweep-max (dist≥10) is within best-of-20 luck (p=0.054) — use the
+robust rule, not the max.
+
+**Live engine support built but NOT deployed — critical catch.** Added a new
+strategy type `engine/determinism_state.py` (+registry/strategy wiring, all
+additive; replay-parity test still green; 8 unit tests). Validating that it
+reproduces the backtest exposed a fatal feed gap: the live tick's coinbase_price/
+move_pct is the STALE ~14s poll (median 1.75bps off the fresh WS spot, sign
+disagrees 12.8%) — a `DeterminismState` reading it is a LOSER (true WR 0.48) while
+self-reporting a fake +$2.4/tr. `det_lwd_v1` is in strategies.yaml but
+**enabled:false**. (`docs/research/forward_deployment.md`)
+
+**Forward validation — running safely** via daily OOS backtest on fresh cb_spot
+(`research/forward_validate.py`, log `docs/research/forward_validation_log.md`):
+6/7 clean days green, OOS (28-29) +$1.68/tr WR 0.908 CI[+0.97,+2.39], cum +$482.
+
+**Pre-LIVE requirement:** wire the fresh WS spot (live_spot) into the paper engine,
+then re-enable det_lwd_v1, confirm live-paper vs backtest drift <30%, then small
+live test. Deliberately gated — paper-prove first.
+
+**Phase 6 (widen to hourly/daily): not triggered** — it was gated on Phases 1-4
+all being negative on 15m; a 15m edge exists, so widening is optional (future
+capacity play; 15m edge is capacity-limited ~$10-50/trade). Tests: 259 pass.
+
+## 2026-05-29 (cont.) — DEPLOYED: determinism edge to forward paper; all mean-rev disabled
+
+Per user: disabled all 9 prior (mean-reversion) strategies; deployed the Phase 1
+determinism edge to live PAPER for forward testing, with a daily max-loss cap.
+
+**Engine work (all additive; replay-parity test green; 13 det/parity tests pass):**
+- **Fresh WS spot wired into the engine** (`spot_ws_collector` now updates the shared
+  SpotPriceCache). Verified live: tick coinbase_price tracks WS spot to 0.15bps (was
+  stale ~1.75bps, sign-wrong 12.8% — which had faked a live +$2.4/tr loser). THIS was
+  the pre-live blocker; now fixed.
+- New strategy type `DeterminismState` + `DailyLossGuard` (engine/determinism_state.py),
+  wired via registry/strategy (det_params). Three hardening fixes found by the
+  "live must reproduce backtest" gate: (1) book-health guard (skip decided/collapsed
+  late-window books), (2) TRUE-outcome settlement via engine.settle_window() on_close
+  (tick-derived settle was optimistic 0.96 vs true 0.89), (3) fresh-spot distance.
+  Validated: live replay reproduces the gauntlet exactly — 336 tr, WR 0.893, +$1.581/tr.
+
+**Live now (`strategies.yaml`):** ALL prior strategies enabled:false. Two enabled:
+- `det_lwd_v1` — uncapped (measures the true forward edge).
+- `det_lwd_v1_capped` — $50/day max-loss cap (live-candidate config).
+Both: 15m, last 60s, |spot−strike|≥5bps, buy favourite ask≤0.90, hold to resolution,
+$10/trade, $1000 capital. Restarted clean (pid 1346); 28 markets; emitting live.
+
+**Watch:** first det trades appear in the last 60s of 15m windows as they close
+(across the day, not just ASIA). Forward track also runs off-engine daily
+(research/forward_validate.py). Data note: joined outcome_up_clean is per-row and
+corrupted on start_price=0 rows; all harnesses filter start_price>0 so results are
+unaffected (live settles on market.start_price = real strike).
+
+## 2026-05-29 (cont.) — Phase 2 added + complete per-trade data capture (1-week forward run)
+
+Per user (let it run 1 week; want complete data to later lift WR/profit via time/
+condition filters; add the 2nd edge):
+- **Phase 2 (stale-quote pickoff) deployed** as `det_sqp_v1` (uncapped) + `det_sqp_v1_capped`
+  ($50/day). New `StaleQuoteState` (engine/stale_quote_state.py) loads a FROZEN empirical
+  P(Up|z) curve (data/research/stale_quote_curve.json); mid-window, |model_p-mid| in
+  [0.08,0.30] + spot jump>=8bps, hold to resolution. Offline replay reproduces the edge:
+  403 tr, WR 0.509, +$3.48/tr, median +$3.69 (higher-variance secondary edge).
+- **Rich per-trade data capture** for BOTH edges → data/jsonl/<sid>/trades_detailed.jsonl:
+  per trade logs hour, dow, symbol, time_left, dist_bps, entry_ask, spread, ask_depth,
+  spot_vel_10s/30s, rvol_60s, (+model_p/z/mispricing for sq), outcome, pnl. This is the
+  dataset for the weekly review to find filters (skip hours/regimes) that raise WR+profit.
+- 4 enabled strategies (2 det + 2 sq); all mean-rev still disabled. Engine: settle_window
+  now settles any hold-to-resolution state (hasattr settle). 266 tests pass, parity green.
+  Restarted pid 17253.
+
+**1-WEEK FORWARD RUN started 2026-05-29 ~12:26 UTC → review ~2026-06-05.** Bot runs via
+nohup (survives session close). Review: live-paper vs backtest drift <30%; slice
+trades_detailed by hour/regime/symbol to propose WR-lifting filters; decide on small live test.

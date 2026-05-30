@@ -24,13 +24,26 @@ POLYMARKET_ARB = REPO_ROOT.parent / "polymarket-arb"
 @pytest.fixture(scope="module", autouse=True)
 def _cwd_polymarket_arb():
     """Loaders use a relative path 'data_v2' that resolves via the symlink in polymarket-arb.
-    Module-scoped so it applies BEFORE the module-scoped historical_15m_markets fixture."""
-    orig = os.getcwd()
+    Module-scoped so it applies BEFORE the module-scoped historical_15m_markets fixture.
+
+    Also resets loaders.DATA_DIR/OUTCOMES_FILE to the relative defaults — other
+    test modules (e.g. tests/sweep_v2/) may have mutated these to absolute
+    sweep_v2 paths within the same pytest session.
+    """
+    sys.path.insert(0, str(POLYMARKET_ARB))
+    from scripts.mean_reversion import loaders as _arb_loaders
+    orig_cwd = os.getcwd()
+    orig_data_dir = _arb_loaders.DATA_DIR
+    orig_outcomes = _arb_loaders.OUTCOMES_FILE
+    _arb_loaders.DATA_DIR = "data_v2"
+    _arb_loaders.OUTCOMES_FILE = "data_v2/outcomes.csv"
     os.chdir(POLYMARKET_ARB)
     try:
         yield
     finally:
-        os.chdir(orig)
+        os.chdir(orig_cwd)
+        _arb_loaders.DATA_DIR = orig_data_dir
+        _arb_loaders.OUTCOMES_FILE = orig_outcomes
 
 from mean_reversion_live.adapters.arb_imports import (  # noqa: E402
     EntryParams, ExitParams, FilterParams, FillParams, HumanParams, SimConfig,

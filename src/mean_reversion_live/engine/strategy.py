@@ -10,6 +10,8 @@ import structlog
 
 from mean_reversion_live.adapters.arb_imports import Portfolio, SimConfig, Trade
 from mean_reversion_live.engine.per_market_state import PerMarketState
+from mean_reversion_live.engine.determinism_state import DetParams, DeterminismState, DailyLossGuard
+from mean_reversion_live.engine.stale_quote_state import StaleQuoteParams, StaleQuoteState
 from mean_reversion_live.engine.persistence import JsonlAppender, atomic_write_json
 
 log = structlog.get_logger(__name__)
@@ -48,12 +50,17 @@ class StrategyHandle:
     timeframe: str
     starting_capital_usd: float
     data_dir: Path
+    # When set, this strategy uses a custom state class instead of the
+    # mean-reversion PerMarketState. Additive: defaults None => unchanged path.
+    det_params: Optional[DetParams] = None
+    sq_params: Optional[StaleQuoteParams] = None
     portfolio: Portfolio = None  # type: ignore
     rng: np.random.Generator = None  # type: ignore
     states: Dict[str, PerMarketState] = field(default_factory=dict)
     trade_log: Optional[JsonlAppender] = None
     signal_log: Optional[JsonlAppender] = None
     snapshot_log: Optional[JsonlAppender] = None
+    trade_detail_log: Optional[JsonlAppender] = None
     # Macro-snapshot provider, injected by the paper engine. Returns a dict.
     _macro_snapshot: Optional[Callable[[int], dict]] = None
     # Per-slug throttle: ts of last logged event for each slug (in seconds).
@@ -62,6 +69,15 @@ class StrategyHandle:
     def __post_init__(self):
         self.portfolio = Portfolio(human=self.cfg.human, bankroll=self.starting_capital_usd)
         self.rng = np.random.default_rng(int(self.cfg.hash_id(), 16) % (2 ** 32))
+        # One daily-loss guard shared across all per-window states of a det /
+        # stale-quote strategy (None for mean-reversion strategies).
+        _cap = None
+        if self.det_params is not None:
+            _cap = self.det_params.max_daily_loss_usd
+        elif self.sq_params is not None:
+            _cap = self.sq_params.max_daily_loss_usd
+        self._det_guard = (DailyLossGuard(_cap)
+                           if (self.det_params or self.sq_params) is not None else None)
         self._setup_io()
         self._replay_existing_trades()
 
@@ -126,6 +142,12 @@ class StrategyHandle:
         # because line-buffered writes turned this into ~200 syscalls/sec.
         self.signal_log = JsonlAppender(sd / "signals.jsonl", fsync_every_n=500, line_buffered=False)
         self.snapshot_log = JsonlAppender(sd / "portfolio_snapshots.jsonl")
+        # Rich per-trade context (det/stale-quote strategies) for post-hoc filter
+        # discovery. Line-buffered + small fsync window: trades are infrequent and
+        # we want each one durable for the weekly review.
+        self.trade_detail_log = (
+            JsonlAppender(sd / "trades_detailed.jsonl", fsync_every_n=1)
+            if (self.det_params is not None or self.sq_params is not None) else None)
 
     @property
     def portfolio_path(self) -> Path:
@@ -137,15 +159,32 @@ class StrategyHandle:
     def applies_to_tick(self, market_slug: str, market_timeframe: str) -> bool:
         return market_timeframe == self.timeframe
 
-    def get_or_create_state(self, slug: str, window_duration: int) -> PerMarketState:
+    def get_or_create_state(self, slug: str, window_duration: int):
         pms = self.states.get(slug)
         if pms is None:
-            pms = PerMarketState(
-                slug=slug,
-                cfg=self.cfg,
-                window_duration_sec=window_duration,
-                observer=self._observer,
-            )
+            if self.det_params is not None:
+                pms = DeterminismState(
+                    slug=slug,
+                    params=self.det_params,
+                    window_duration_sec=window_duration,
+                    observer=self._observer,
+                    guard=self._det_guard,
+                )
+            elif self.sq_params is not None:
+                pms = StaleQuoteState(
+                    slug=slug,
+                    params=self.sq_params,
+                    window_duration_sec=window_duration,
+                    observer=self._observer,
+                    guard=self._det_guard,
+                )
+            else:
+                pms = PerMarketState(
+                    slug=slug,
+                    cfg=self.cfg,
+                    window_duration_sec=window_duration,
+                    observer=self._observer,
+                )
             self.states[slug] = pms
         return pms
 
@@ -215,6 +254,25 @@ class StrategyHandle:
             "seconds_held": trade.seconds_held,
         })
 
+    def record_trade_detailed(self, trade: Trade, ctx: dict) -> None:
+        """Write a single analysis-ready row: trade outcome + full entry context
+        (hour, symbol, distance, price, spread, depth, vol, velocity). Used by the
+        weekly review to find condition/time filters that lift WR + profit."""
+        if self.trade_detail_log is None or not ctx:
+            return
+        rec = {
+            "strategy_id": self.id, "slug": trade.slug, "side": trade.side,
+            "entry_ts_ms": trade.entry_ts_ms, "exit_ts_ms": trade.exit_ts_ms,
+            "entry_price": trade.entry_price, "exit_price": trade.exit_price,
+            "shares": trade.shares, "fee_total": trade.fee_total,
+            "pnl": trade.pnl, "seconds_held": trade.seconds_held,
+            **ctx,
+        }
+        try:
+            self.trade_detail_log.append(rec)
+        except Exception as e:  # pragma: no cover
+            log.warning("trade_detail_append_failed", err=str(e), strategy=self.id)
+
     def persist_portfolio(self) -> None:
         atomic_write_json(self.portfolio_path, {
             "strategy_id": self.id,
@@ -246,6 +304,6 @@ class StrategyHandle:
         })
 
     def close(self) -> None:
-        for log_ in (self.trade_log, self.signal_log, self.snapshot_log):
+        for log_ in (self.trade_log, self.signal_log, self.snapshot_log, self.trade_detail_log):
             if log_ is not None:
                 log_.close()
