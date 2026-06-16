@@ -357,6 +357,11 @@ class DeterminismState:
         if self.p.mode == "xb":
             return self._xb_entry(row, d, ts, time_left, move, ymid, portfolio)
 
+        # ── mode="tadiv_approx": TA-divergence approximation entry. Same separate-
+        #    path pattern as psettle/xb — returns here, legacy flow byte-identical. ──
+        if self.p.mode == "tadiv_approx":
+            return self._tadiv_entry(row, d, ts, time_left, move, ymid, portfolio)
+
         fav_yes = ymid >= 0.5
         dist_bps = abs(move) * 100.0
         spot_fav_yes = move > 0
@@ -665,6 +670,63 @@ class DeterminismState:
         d["features"] = {"fav_ask": ctx["entry_ask"], "time_left": time_left,
                          "xb_gap_bps": ctx["xb_gap_bps"], "xb_edge": ctx["xb_edge"],
                          "eff_max_ask": round(p.max_ask, 4)}
+        self._emit(d)
+        return None
+
+    def _tadiv_entry(self, row, d: dict, ts: int, time_left: int, move: float,
+                     ymid: float, portfolio: Portfolio) -> None:
+        """mode="tadiv_approx" gate + entry — APPROXIMATION twin of research
+        fam_ta_divergence. Buy the 30s-spot-move side when |vel_bps(30)| >=
+        tadiv_ret_min_bps and vel_bps(10) agrees in sign (EMA-slope proxy).
+
+        Reached only after the shared gates (time band [t_min_sec, t_max_sec],
+        healthy two-sided book, can_enter, daily-loss guard) — which run upstream
+        in on_tick before this dispatch, so no in-method time guard is needed.
+        """
+        p = self.p
+        sec = int(row["seconds_into_window"])
+        v30 = self._roll.vel_bps(30)
+        v10 = self._roll.vel_bps(10)
+        if abs(v30) < float(p.tadiv_ret_min_bps):
+            d["decision"] = "skipped_tadiv_small_move"; self._emit(d); return None
+        if (v30 > 0) != (v10 > 0):
+            d["decision"] = "skipped_tadiv_slope_disagree"; self._emit(d); return None
+        buy_yes = v30 > 0
+        side = "UP" if buy_yes else "DOWN"
+        ask = float(row["yes_best_ask"]) if buy_yes else float(row["no_best_ask"])
+        if not (p.min_ask <= ask <= p.max_ask):
+            d["decision"] = "skipped_tadiv_ask_band"; self._emit(d); return None
+        depth_shares = float(row["yes_ask_depth"]) if buy_yes else float(row["no_ask_depth"])
+        if depth_shares * ask < p.fixed_bet_usd:    # not enough top-of-book USD
+            d["decision"] = "skipped_no_fill"; self._emit(d); return None
+
+        shares = p.fixed_bet_usd / ask
+        hour, dow = utc_hour_dow(ts)
+        adverse_vel = -(1.0 if move > 0 else -1.0) * self._roll.vel_bps(10)
+        ctx = {
+            "strategy_kind": "determinism", "symbol": symbol_of(self.slug),
+            "utc_hour": hour, "dow": dow, "entry_sec": sec, "time_left": time_left,
+            "dist_bps": round(abs(move) * 100.0, 2), "fav_side": side,
+            "entry_ask": round(ask, 4), "yes_mid": round(ymid, 4),
+            "spread_yes": round(float(row["spread_yes"]), 4),
+            "ask_depth_usd": round(depth_shares * ask, 1),
+            "spot_vel_10s_bps": round(v10, 2),
+            "spot_vel_30s_bps": round(v30, 2),
+            "rvol_60s_bps": round(self._roll.rvol_bps(60), 2),
+            "strike_crossings": self._crossings,
+            "adverse_vel_10s_bps": round(adverse_vel, 2),
+        }
+        self.pos = {"side": side, "entry": ask, "shares": shares,
+                    "bet": p.fixed_bet_usd,
+                    "fee_entry": _fee(shares, ask, p.fee_rate),
+                    "ts": ts, "entry_sec": sec, "ctx": ctx}
+        self.state = "HOLDING"
+        portfolio.on_entry(ts)
+        if self._guard is not None:
+            self._guard.on_entry(ts, self.slug, self.pos["bet"] + self.pos["fee_entry"])
+        d["decision"] = "fired"; d["side_signal"] = side
+        d["features"] = {"vel30_bps": round(v30, 2), "vel10_bps": round(v10, 2),
+                         "entry_ask": round(ask, 4), "time_left": time_left}
         self._emit(d)
         return None
 
