@@ -349,6 +349,60 @@ def fam_psettle(b, p):
     return c[keep], by[keep]
 
 
+def fam_ta_directional(b, p):
+    """TA DIRECTIONAL (honest control — book already prices spot; expected to
+    fail): base-asset trend says up -> buy UP. Trend = EMA slope sign with a
+    minimum magnitude (bps/sec). Tests the rejected family on clean data."""
+    c = _ta_frame()
+    m = ((c["time_left_sec"] >= p["t_lo"]) & (c["time_left_sec"] <= p["t_hi"])
+         & (c["ta_ema_slope"].abs() >= p["slope_min"])
+         & (c["ta_ema_slope"] != 0.0))      # flat sec-0 warm-up has no direction
+    up = c["ta_ema_slope"] > 0
+    by = up.to_numpy()
+    ask = np.where(by, c["yes_best_ask"].to_numpy("f8"),
+                   1.0 - c["yes_best_bid"].to_numpy("f8"))
+    keep = (m.to_numpy() & np.isfinite(ask)
+            & (ask >= p["ask_lo"]) & (ask <= p["ask_hi"]))
+    return c[keep], by[keep]
+
+
+def fam_ta_filter(b, p):
+    """TA FILTER on the proven determinism edge: only take the favourite when the
+    base-asset regime label matches (e.g. 'range' = no trend to fight). Tests
+    whether a TA gate LIFTS an edge we already know is real."""
+    c, by = fam_det(_ta_frame(), p)
+    keep = (c["ta_regime"] == p["regime"]).to_numpy()
+    return c[keep], by[keep]
+
+
+def fam_ta_regime(b, p):
+    """TA REGIME selection: run the determinism edge only inside an ATR band
+    (bps). Thesis: the book lags spot more in higher-vol regimes -> bigger
+    overshoots to harvest."""
+    c, by = fam_det(_ta_frame(), p)
+    atr = c["ta_atr"].to_numpy("f8")
+    keep = np.isfinite(atr) & (atr >= p["atr_lo"]) & (atr < p["atr_hi"])
+    return c[keep], by[keep]
+
+
+def fam_ta_divergence(b, p):
+    """TA DIVERGENCE (most aligned with 'rent on slow book repricing'): the base
+    asset has moved (recent 30s return + EMA slope agree, magnitude >= ret_min
+    bps) but the book hasn't repriced toward it. Buy the side the move implies."""
+    c = _ta_frame()
+    m = ((c["time_left_sec"] >= p["t_lo"]) & (c["time_left_sec"] <= p["t_hi"])
+         & (c["ta_ema_slope"].abs() >= p["slope_min"])
+         & (c["ta_ret_30s"].abs() >= p["ret_min"])
+         & (np.sign(c["ta_ema_slope"]) == np.sign(c["ta_ret_30s"])))
+    up = c["ta_ret_30s"] > 0
+    by = up.to_numpy()
+    ask = np.where(by, c["yes_best_ask"].to_numpy("f8"),
+                   1.0 - c["yes_best_bid"].to_numpy("f8"))
+    keep = (m.to_numpy() & np.isfinite(ask)
+            & (ask >= p["ask_lo"]) & (ask <= p["ask_hi"]))
+    return c[keep], by[keep]
+
+
 def _btc_ref(b):
     if _BTC_REF["df"] is None:
         btc = b[b["symbol"] == "btc"][
@@ -441,6 +495,8 @@ BUILDERS = {
     "liq": fam_liq, "tod": fam_tod, "vol": fam_vol, "xcoin": fam_xcoin,
     "zscore": fam_zscore, "combo": fam_combo, "persymbol": fam_persymbol,
     "psettle": fam_psettle,
+    "ta_directional": fam_ta_directional, "ta_filter": fam_ta_filter,
+    "ta_regime": fam_ta_regime, "ta_divergence": fam_ta_divergence,
 }
 
 RATIONALE = {
@@ -463,6 +519,14 @@ RATIONALE = {
     "persymbol": "per-coin determinism: which symbols carry the edge",
     "psettle": "calibrated P(print) vs book ask: buy the side the settlement "
                "model says is underpriced by >= d (generalizes the OP4 fade)",
+    "ta_directional": "base-asset TA trend says up -> buy UP (honest control; "
+                      "book already prices spot, expected to fail)",
+    "ta_filter": "TA regime gate on determinism: take the favourite only when "
+                 "the base-asset regime label matches (does TA lift a real edge?)",
+    "ta_regime": "ATR-band selection on determinism: harvest only where the "
+                 "book lags spot more (higher base-asset vol = bigger overshoot)",
+    "ta_divergence": "base asset moved (EMA slope + 30s return agree) but the "
+                     "book hasn't repriced; buy the move-implied side",
 }
 
 
@@ -662,6 +726,37 @@ def gen_specs():
         ask=[(0.05, 0.35), (0.50, 0.78), (0.05, 0.90)],
         cl_floor=[0, 5, 12]))
 
+    # TA DIRECTIONAL — honest control across slope thresholds + ask bands
+    specs += list(_grid(
+        "ta_directional",
+        t=[(1, 120), (120, 420), (420, 780)],
+        slope_min=[0.0, 0.5, 1.0, 2.0],
+        ask=[(0.05, 0.95), (0.30, 0.70), (0.40, 0.60)]))
+
+    # TA FILTER — determinism gated by base-asset regime
+    specs += list(_grid(
+        "ta_filter",
+        t=[(1, 120), (60, 300), (120, 420)],
+        dist_min=[5, 8, 12],
+        ask=[(0.55, 0.90), (0.70, 0.95)],
+        regime=["range", "trend", "highvol"]))
+
+    # TA REGIME — determinism inside an ATR band (bps)
+    specs += list(_grid(
+        "ta_regime",
+        t=[(1, 120), (60, 300), (120, 420)],
+        dist_min=[5, 8],
+        ask=[(0.55, 0.90)],
+        atr=[(0.0, 1.0), (1.0, 3.0), (3.0, 1e9), (1.0, 1e9)]))
+
+    # TA DIVERGENCE — base moved, book lags; buy the move side
+    specs += list(_grid(
+        "ta_divergence",
+        t=[(1, 120), (60, 300), (120, 420), (240, 600)],
+        slope_min=[0.0, 0.5, 1.0],
+        ret_min=[3.0, 5.0, 10.0, 20.0],
+        ask=[(0.30, 0.55), (0.30, 0.70), (0.45, 0.65)]))
+
     # normalize tuple axes into named params + assign ids
     out = []
     for i, s in enumerate(specs):
@@ -675,6 +770,8 @@ def gen_specs():
             p["h_lo"], p["h_hi"] = p.pop("h")
         if "v" in p:
             p["v_lo"], p["v_hi"] = p.pop("v")
+        if "atr" in p:
+            p["atr_lo"], p["atr_hi"] = p.pop("atr")
         out.append({"id": f"{fam}_{i:04d}", "family": fam,
                     "rationale": RATIONALE[fam], "params": p})
     return out

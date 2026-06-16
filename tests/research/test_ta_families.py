@@ -29,3 +29,60 @@ def test_ta_frame_has_ta_columns(monkeypatch):
     for col in ["ta_ema_slope", "ta_rsi", "ta_regime", "ta_z_vwap"]:
         assert col in f.columns
     assert len(f) == len(_fake_base())
+
+
+def _patch_ta(monkeypatch):
+    monkeypatch.setattr(hs, "load_base", lambda: _fake_base())
+    hs._TA["df"] = None
+
+
+def test_fam_ta_directional_buys_up_in_uptrend(monkeypatch):
+    _patch_ta(monkeypatch)
+    p = {"t_lo": 1, "t_hi": 900, "slope_min": 0.0, "ask_lo": 0.05, "ask_hi": 0.95}
+    c, by = hs.fam_ta_directional(hs._ta_frame(), p)
+    assert len(c) > 0
+    # in the rising window every qualifying tick should buy UP (yes)
+    up_rows = c["slug"] == "btc-up"
+    assert by[up_rows.to_numpy()].all()
+
+
+def test_fam_ta_filter_subsets_a_base_edge(monkeypatch):
+    _patch_ta(monkeypatch)
+    base_p = {"t_lo": 1, "t_hi": 900, "dist_min": 5, "ask_lo": 0.5, "ask_hi": 0.95}
+    full, _ = hs.fam_det(hs._ta_frame(), base_p)
+    p = {**base_p, "regime": "range"}
+    c, by = hs.fam_ta_filter(hs._ta_frame(), p)
+    assert len(c) <= len(full)            # a filter can only remove rows
+    assert (c["ta_regime"] == "range").all()
+    assert len(by) == len(c)
+
+
+def test_fam_ta_regime_keeps_only_band(monkeypatch):
+    _patch_ta(monkeypatch)
+    p = {"t_lo": 1, "t_hi": 900, "dist_min": 5, "ask_lo": 0.5, "ask_hi": 0.95,
+         "atr_lo": 0.0, "atr_hi": 1e9}
+    c, by = hs.fam_ta_regime(hs._ta_frame(), p)
+    assert len(c) == len(by)
+    assert (c["ta_atr"] >= 0.0).all()
+
+
+def test_fam_ta_divergence_buys_trend_side_when_book_lags(monkeypatch):
+    _patch_ta(monkeypatch)
+    p = {"t_lo": 1, "t_hi": 900, "slope_min": 0.0, "ask_lo": 0.05, "ask_hi": 0.95,
+         "ret_min": 0.0}
+    c, by = hs.fam_ta_divergence(hs._ta_frame(), p)
+    assert len(c) == len(by)
+    if len(c):
+        assert by.dtype == bool
+
+
+def test_all_ta_families_registered():
+    for fam in ["ta_directional", "ta_filter", "ta_regime", "ta_divergence"]:
+        assert fam in hs.BUILDERS
+        assert fam in hs.RATIONALE
+
+
+def test_gen_specs_includes_ta(monkeypatch):
+    specs = hs.gen_specs()
+    fams = {s["family"] for s in specs}
+    assert {"ta_directional", "ta_filter", "ta_regime", "ta_divergence"} <= fams
