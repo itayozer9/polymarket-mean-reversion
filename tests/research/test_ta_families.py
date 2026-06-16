@@ -8,7 +8,7 @@ import research.analysis.hypothesis_sweep as hs
 def _fake_base():
     # two windows, each 120s; one trending up (fav up), one flat
     rows = []
-    for slug, base, drift in [("btc-up", 100.0, 0.5), ("btc-flat", 100.0, 0.0)]:
+    for slug, base, drift in [("btc-up", 100.0, 0.5), ("btc-flat", 100.0, 0.0), ("btc-down", 100.0, -0.5)]:
         for sec in range(120):
             spot = base + drift * sec
             rows.append({
@@ -44,6 +44,8 @@ def test_fam_ta_directional_buys_up_in_uptrend(monkeypatch):
     # in the rising window every qualifying tick should buy UP (yes)
     up_rows = c["slug"] == "btc-up"
     assert by[up_rows.to_numpy()].all()
+    down_rows = c["slug"] == "btc-down"
+    assert (~by[down_rows.to_numpy()]).all()   # down-trend -> buy DOWN (no)
 
 
 def test_fam_ta_filter_subsets_a_base_edge(monkeypatch):
@@ -59,11 +61,13 @@ def test_fam_ta_filter_subsets_a_base_edge(monkeypatch):
 
 def test_fam_ta_regime_keeps_only_band(monkeypatch):
     _patch_ta(monkeypatch)
+    lo, hi = 1.0, 3.0
     p = {"t_lo": 1, "t_hi": 900, "dist_min": 5, "ask_lo": 0.5, "ask_hi": 0.95,
-         "atr_lo": 0.0, "atr_hi": 1e9}
+         "atr_lo": lo, "atr_hi": hi}
     c, by = hs.fam_ta_regime(hs._ta_frame(), p)
     assert len(c) == len(by)
-    assert (c["ta_atr"] >= 0.0).all()
+    atr = c["ta_atr"].to_numpy("f8")
+    assert ((atr >= lo) & (atr < hi)).all()    # band is enforced, not tautological
 
 
 def test_fam_ta_divergence_buys_trend_side_when_book_lags(monkeypatch):

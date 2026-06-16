@@ -392,6 +392,7 @@ def fam_ta_divergence(b, p):
     c = _ta_frame()
     m = ((c["time_left_sec"] >= p["t_lo"]) & (c["time_left_sec"] <= p["t_hi"])
          & (c["ta_ema_slope"].abs() >= p["slope_min"])
+         & (c["ta_ema_slope"] != 0.0)        # flat sec-0 warm-up has no direction
          & (c["ta_ret_30s"].abs() >= p["ret_min"])
          & (np.sign(c["ta_ema_slope"]) == np.sign(c["ta_ret_30s"])))
     up = c["ta_ret_30s"] > 0
