@@ -13,6 +13,7 @@ import json
 
 from mean_reversion_live.engine import trail_v2_runtime
 from mean_reversion_live.engine.determinism_state import DetParams
+from mean_reversion_live.engine.print_model import load_print_model
 from mean_reversion_live.engine.stale_quote_state import StaleQuoteParams
 from mean_reversion_live.engine.strategy import StrategyHandle
 
@@ -61,10 +62,55 @@ def load_strategies(yaml_path: Path, data_dir: Path) -> List[StrategyHandle]:
                 dist_min_bps=float(dd.get("dist_min_bps", 5.0)),
                 max_ask=float(dd.get("max_ask", 0.90)),
                 min_ask=float(dd.get("min_ask", 0.50)),
+                mode=str(dd.get("mode", "consistent")),
                 fixed_bet_usd=float(cfg.human.fixed_bet_usd),
                 fee_rate=float(cfg.fill.fee_rate),
                 max_daily_loss_usd=(float(dd["max_daily_loss_usd"])
                                     if dd.get("max_daily_loss_usd") is not None else None),
+                daily_loss_mode=str(dd.get("daily_loss_mode", "soft_settled")),
+                adverse_vel_max_bps=(float(dd["adverse_vel_max_bps"])
+                                     if dd.get("adverse_vel_max_bps") is not None else None),
+                min_strike_crossings=int(dd.get("min_strike_crossings", 0)),
+                vol_max_bps=(float(dd["vol_max_bps"])
+                             if dd.get("vol_max_bps") is not None else None),
+                restrict_fav_side=dd.get("restrict_fav_side"),
+                oracle_gate=dd.get("oracle_gate"),
+                cl_dist_min_bps=(float(dd["cl_dist_min_bps"])
+                                 if dd.get("cl_dist_min_bps") is not None else None),
+                oracle_gate_on_missing=str(dd.get("oracle_gate_on_missing", "skip")),
+                max_ask_hi=(float(dd["max_ask_hi"])
+                            if dd.get("max_ask_hi") is not None else None),
+                cl_dist_hi_bps=(float(dd["cl_dist_hi_bps"])
+                                if dd.get("cl_dist_hi_bps") is not None else None),
+                # mode="psettle" (settlement-print model twins, 2026-06-11). The
+                # model artifact is loaded ONCE at boot (fail-fast on a malformed /
+                # feature-drifted file) — same pattern as stale_quote's curve_file.
+                psettle_side=dd.get("psettle_side"),
+                psettle_margin=(float(dd["psettle_margin"])
+                                if dd.get("psettle_margin") is not None else None),
+                psettle_p_fav_max=(float(dd["psettle_p_fav_max"])
+                                   if dd.get("psettle_p_fav_max") is not None else None),
+                psettle_fav_ask_min=(float(dd["psettle_fav_ask_min"])
+                                     if dd.get("psettle_fav_ask_min") is not None else None),
+                psettle_cl_floor_bps=(float(dd["psettle_cl_floor_bps"])
+                                      if dd.get("psettle_cl_floor_bps") is not None else None),
+                psettle_on_missing=str(dd.get("psettle_on_missing", "skip")),
+                psettle_model=(load_print_model(dd["psettle_model_file"])
+                               if dd.get("psettle_model_file") else None),
+                # mode="xb" (5m↔15m cross-book causal twin, 2026-06-12). All
+                # no-op defaults; DeterminismState fail-fasts at boot if mode
+                # is "xb" without xb_premium/xb_gap_min_bps.
+                xb_premium=(float(dd["xb_premium"])
+                            if dd.get("xb_premium") is not None else None),
+                xb_gap_min_bps=(float(dd["xb_gap_min_bps"])
+                                if dd.get("xb_gap_min_bps") is not None else None),
+                xb_min_ref_usd=float(dd.get("xb_min_ref_usd", 1.0)),
+                xb_on_missing=str(dd.get("xb_on_missing", "skip")),
+                # mode="tadiv_approx" (TA-divergence approximation twin, 2026-06-16).
+                # DeterminismState fail-fasts at boot if mode is "tadiv_approx"
+                # without tadiv_ret_min_bps.
+                tadiv_ret_min_bps=(float(dd["tadiv_ret_min_bps"])
+                                   if dd.get("tadiv_ret_min_bps") is not None else None),
             )
         # Stale-quote (Phase 2) strategy: loads a frozen empirical P(Up|z) curve.
         sq_params = None
@@ -86,6 +132,9 @@ def load_strategies(yaml_path: Path, data_dir: Path) -> List[StrategyHandle]:
                 fee_rate=float(cfg.fill.fee_rate),
                 max_daily_loss_usd=(float(sq["max_daily_loss_usd"])
                                     if sq.get("max_daily_loss_usd") is not None else None),
+                daily_loss_mode=str(sq.get("daily_loss_mode", "soft_settled")),
+                max_dist_bps=(float(sq["max_dist_bps"])
+                              if sq.get("max_dist_bps") is not None else None),
             )
         staircase = entry.get("trail_v2_staircase")
         if staircase:
@@ -100,6 +149,7 @@ def load_strategies(yaml_path: Path, data_dir: Path) -> List[StrategyHandle]:
             data_dir=data_dir,
             det_params=det_params,
             sq_params=sq_params,
+            live=bool(entry.get("live", False)),
         ))
     if needs_trail_v2:
         trail_v2_runtime.install_patch()

@@ -113,3 +113,54 @@ def test_tadiv_consistent_mode_unaffected_by_same_ticks():
     # legacy default band: t_max_sec=60 -> sec=850 (time_left=50<=60), ask in [0.50,0.90].
     s.on_tick(_row(850, move_pct=0.10, yes_mid=0.85, yes_ask=0.85, no_ask=0.16), pf, rng)
     assert s.state == "HOLDING" and pf.open_positions == 1
+
+
+# ── registry parsing of mode="tadiv_approx" params ───────────────────────────
+
+def test_registry_parses_tadiv_approx_params(tmp_path):
+    # A determinism strategy with mode=tadiv_approx + tadiv_ret_min_bps must load
+    # with the field populated on the resulting DetParams (same mechanism as the
+    # psettle_* / xb_* keys the registry already maps by hand).
+    import yaml as _yaml
+    from mean_reversion_live.engine.registry import load_strategies
+
+    cfg = [{
+        "id": "tadiv_test_v1",
+        "name": "tadiv registry parse test",
+        "enabled": True,
+        "type": "determinism",
+        "starting_capital_usd": 1000.0,
+        "timeframe": "15m",
+        "determinism": {
+            "mode": "tadiv_approx",
+            "tadiv_ret_min_bps": 5.0,
+            "t_min_sec": 60,
+            "t_max_sec": 300,
+            "min_ask": 0.30,
+            "max_ask": 0.55,
+        },
+        "sim_config": {
+            "entry": {"side": "BOTH", "entry_price_min": 0.30, "entry_price_max": 0.55,
+                      "drop_magnitude_pct": 0.0, "drop_window_sec": 30, "min_time_left_sec": 0,
+                      "proximity_max_pct": 100.0, "min_seconds_into_window": 0},
+            "exit": {"profit_target_pct": 0.0, "stop_loss_pct": None, "max_hold_sec": 900,
+                     "trailing_stop_pct": None},
+            "filter": {"min_book_depth_usd": 0.0, "max_spread": 1.0, "book_imbalance_min": None,
+                       "vol_regime": "ALL", "time_of_day": "ALL", "multi_tier_entry": 1,
+                       "correlated_signal_filter": False},
+            "human": {"reaction_delay_min_sec": 0.0, "reaction_delay_max_sec": 0.0,
+                      "signal_skip_prob": 0.0, "daily_trade_cap": None, "post_loss_cooldown_sec": 0,
+                      "concurrent_position_cap": 50, "fixed_bet_usd": 10.0},
+            "fill": {"fee_rate": 0.07, "reject_prob": 0.0, "use_next_tick_for_fill": True,
+                     "realistic_fill_model": True},
+        },
+    }]
+    yaml_path = tmp_path / "strategies.yaml"
+    yaml_path.write_text(_yaml.safe_dump(cfg))
+
+    handles = load_strategies(yaml_path, tmp_path)
+    assert len(handles) == 1
+    dp = handles[0].det_params
+    assert dp is not None
+    assert dp.mode == "tadiv_approx"
+    assert dp.tadiv_ret_min_bps == 5.0
