@@ -31,7 +31,19 @@ def test_flat_series_is_range():
     assert abs(last["ta_ema_slope"]) < 1e-6
     assert abs(last["ta_z_vwap"]) < 1e-6
     assert last["ta_boll_width"] < 1.0
+    assert last["ta_ma_cross"] == 0   # equal EMAs -> sign 0 (documented tie/flat)
     assert last["ta_regime"] == "range"
+
+
+def test_highvol_regime_is_reachable():
+    # Large alternating jumps keep abs(ta_z_vwap) < 1.5 (mean-reverting around a
+    # level, no sustained drift) but push ta_boll_width >= 8.0 bps -> highvol.
+    n = 120
+    base = 100.0
+    amp = 0.6  # ~60 bps swing; tuned so std/mean*1e4 clears the 8.0 bps gate
+    prices = base + amp * (np.arange(n) % 2) - amp / 2.0
+    out = build_ta_features(_window("hv-1", prices))
+    assert (out["ta_regime"] == "highvol").any()
 
 
 def test_features_are_causal():

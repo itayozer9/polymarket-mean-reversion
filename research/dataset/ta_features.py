@@ -35,6 +35,15 @@ def _rsi(ret: pd.Series, period: int = 14) -> pd.Series:
 
 
 def _features_one(g: pd.DataFrame) -> pd.DataFrame:
+    # WARM-UP CONTRACT: the first ~14-60 seconds of each window are rolling/ewm
+    # warm-up. The std-derived features (ta_boll_width, ta_z_vwap) and
+    # ta_atr / ta_ema_slope structurally collapse to 0.0 there BY DESIGN —
+    # rolling std is NaN with <2 samples and is fillna(0.0)'d into the
+    # conservative "range" / no-signal default. This is NOT a real low-vol
+    # regime: a sec-0 zero is synthetic, not measured calm. Downstream gates
+    # MUST rely on time_left_sec / entry-second bands and never treat early-window
+    # zeros as a tradable signal. The 0.0 (not NaN) semantics are deliberate —
+    # tests and downstream isfinite-gating depend on them; do NOT switch to NaN.
     s = g["cb_spot"].astype("f8")
     bps = 1e4 / s.clip(lower=1e-9)                 # 1 price unit -> bps of price
     ema30 = s.ewm(span=30, adjust=False, min_periods=1).mean()
