@@ -4,6 +4,45 @@
 
 ---
 
+## 2026-06-18 — DE-STALED RECKONING: 3 live strategies KILLED/DEMOTED, only det_lwd_live left live
+
+User asked for a full "what's working / not / needs time" verdict + path forward to profitable
+strategies (plan: ~/.claude/plans/ok-we-are-running-mutable-meteor.md, approved). Decisions: change
+nothing live until the firm re-score; DEFER fill-model recal (A) (~180 clean fills <250 needed, use
+the v2/live_guarded bracket); do all of reckoning + faithful-tadiv + new-research.
+
+**RECKONING DONE (B + re-score):** rebuilt joined_15m 05-23..06-18 (9.19M rows, ~13min) +
+regenerated slim (8.02M, verified max date 06-18 — the stale-slim trap), added early_disagree_live
+to rejudge CONFIGS, ran rejudge_clean (~6 clean days) + live_gap_attribution(--since 06-12). Branch
+reckoning-0618.
+
+**FIRM CLEAN-DATA VERDICTS (clean_future, live_guarded EV/fill, Chainlink-settled):**
+| strategy | clean EV/fill | freq vs dev | live realized | verdict |
+|---|---|---|---|---|
+| det_d12_dual_live | −$0.64 CI[−1.66,+0.32] | 26.6→18.3 | −$103 (halted 06-17) | **KILLED** (enabled:false; even paper −$2.73) |
+| fav_disagree_live | −$1.18 CI[−3.21,+0.84] | 38→7.3 collapsed | −$66, still bleeding | **KILLED** (live:false) |
+| early_disagree_live | +$0.62 n=6 INSUF | 41.5→3.4 collapsed 12× | +$4 cum, −$38 in 3d | **DEMOTED** (live:false) |
+| det_lwd_live | +$0.48 CI[**−0.13**,+1.05] | 36.4→20.9 | +$30 cum (pre-clean) | **KEPT live $5** (marginal, watch) |
+| fav_momentum (paper) | +$0.55 CI[**+0.168**,+0.893] WR92.6% | ok (30/actday) | — | only config passing keep-gate, BUT **83% determinism overlap** (78% inside det_d12_wide) → NOT promoted; flag as det_lwd RETUNE candidate next review |
+
+**THE HONEST META-FINDING:** the book-lag edge family has DECAYED. No live strategy clears
+program-success (clean CI-lo>0 AND positive rolling-7d clean live book). Gap attribution (clean era,
+intents=584): paper +$167 was **−$236 wrong-oracle inflation** (paper settled Coinbase, live
+Chainlink) → paper numbers were never real; live **normal fills lose −$80 structurally** (not knives/
+misses) → the edges genuinely don't work live on clean data. Live book total −$116.63 (≈ data-api,
+Δ≈0 so no backfill). EXECUTED: 3 demotes in strategies.yaml + safe run_combined restart (pid 39013;
+executor pid 20062 + real-money books UNTOUCHED); LIVE roster now = **det_lwd_live ONLY**; the 3
+demoted continue as paper twins.
+
+**STILL OPEN (this session, approved):** Phase 3 — offline-validate tadiv (needs joined.py
+spot_vel_30s + rebuild) then build parity-faithful mode="tadiv" (PART B); Phase 4 — new-edge research
+campaign (needs a brainstorm: divergence/earlier-timing + book-lag-independent families, honest gate
+CI-lo>0 + Jaccard<0.5). DEFERRED to ~06-24 review: fill-model live-2 recal (when clean fills ≥250),
+re-score det_lwd/psettle/tadiv on the live gate (future.n≥30), sq rolling-curve engine wiring,
+op-2/op-1 print-model review.
+
+---
+
 ## 2026-06-16 (eve IDT) — TA STRATEGY CAMPAIGN: 1 new edge (ta_divergence) → 2 PAPER twins deployed
 
 User asked to expand strategy research using technical analysis on the BASE ASSET, fully backtested.

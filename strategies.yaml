@@ -1403,7 +1403,7 @@
 - id: early_disagree_live
   name: "Early-disagree LIVE ($5/trade real money; tl 450-900s, |dist|>=10bps, buy spot side ask 0.30-0.45, hold; fills_live future +$2.35/fill @$5; $50/day hard cap, $100 bankroll)"
   enabled: true
-  live: true
+  live: false   # DEMOTED 2026-06-18 reckoning: clean opportunity collapsed 41.5->3.4/actday + losing real money (-$38 in 3 days). Paper twin continues.
   type: determinism
   starting_capital_usd: 100.0
   timeframe: "15m"
@@ -1439,7 +1439,7 @@
 - id: fav_disagree_live
   name: "Fav-disagree LIVE ($5/trade real money; tl 120-360s, |dist|>=10bps, buy spot side ask 0.05-0.45, hold; live-model future +$3.54/fill; $50/day hard cap, $100 bankroll)"
   enabled: true
-  live: true
+  live: false   # KILLED 2026-06-18 reckoning: clean EV -$1.18/fill, freq collapsed 38->7.3/actday, -$66 real money, still bleeding. Paper twin continues.
   type: determinism
   starting_capital_usd: 100.0
   timeframe: "15m"
@@ -1559,8 +1559,8 @@
 # within [entry_ask, max_ask=0.78] — never overpays into the -EV band.
 - id: det_d12_dual_live
   name: "det_d12 DUAL-ORACLE LIVE ($5/trade real money; AGREE gate + adaptive max_ask 0.78->0.85@|cl_dist|>=20 + adverse_vel2; $25/day hard cap, $100 bankroll)"
-  enabled: true
-  live: true
+  enabled: false   # KILLED 2026-06-18 reckoning: -$103 (bankroll exhausted, self-halted 06-17); clean EV -$0.64/fill, even paper -$2.73. Fully off (overpay-above-cap defect).
+  live: false
   type: determinism
   starting_capital_usd: 100.0
   timeframe: "15m"
