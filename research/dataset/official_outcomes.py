@@ -50,26 +50,35 @@ def parse_official_outcome(doc) -> str | None:
     return None
 
 
-def fetch_official_outcome(slug: str, base: str | None = None, timeout: int = 8) -> str | None:
+def fetch_official_outcome(slug: str, base: str | None = None, timeout: int = 8,
+                           retries: int = 4) -> str | None:
     """GET the resolved market for `slug` (closed=true is required — default omits resolved
-    markets) and parse its outcome. Returns None on any network/parse failure (caller retries)."""
+    markets) and parse its outcome. Retries with backoff on transient failures (esp. HTTP 429
+    rate-limits, which silently null-out a high-concurrency batch); returns None only when the
+    market is genuinely unresolved or every retry failed."""
+    import time
     import requests
     base = base or get_settings().gamma_base_url
-    try:
-        r = requests.get(f"{base}/markets", params={"slug": slug, "closed": "true"}, timeout=timeout)
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        return None
-    doc = (data[0] if isinstance(data, list) else data) if data else None
-    return parse_official_outcome(doc)
+    for attempt in range(retries):
+        try:
+            r = requests.get(f"{base}/markets", params={"slug": slug, "closed": "true"},
+                             timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            doc = (data[0] if isinstance(data, list) else data) if data else None
+            return parse_official_outcome(doc)
+        except Exception:
+            if attempt == retries - 1:
+                return None
+            time.sleep(0.5 * (2 ** attempt))   # 0.5, 1, 2s backoff
+    return None
 
 
 def _to_up(o: str | None) -> float:
     return 1.0 if o == "UP" else 0.0 if o == "DOWN" else float("nan")
 
 
-def build_official_outcomes(slugs, out: str = OUT, max_workers: int = 16) -> pd.DataFrame:
+def build_official_outcomes(slugs, out: str = OUT, max_workers: int = 6) -> pd.DataFrame:
     """Fetch+cache official outcomes for `slugs`. Incremental: slugs already in the cache with a
     NON-null outcome are skipped; null/missing are re-fetched (they may have since resolved)."""
     cached: dict[str, float] = {}
