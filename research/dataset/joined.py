@@ -79,6 +79,12 @@ def _enrich_symbol(symbol: str, timeframe: str, date_start: str, date_end: str,
     else:
         df["cb_spot"] = np.nan
 
+    # 4b) asof-merge the Chainlink settlement-oracle feed (ships all-zeros from the
+    #     base collector). chainlink_price = latest chainlink <= tick ts (per symbol);
+    #     also adds cl_cb_basis_bps (the oracle divergence the E-oracle edge trades).
+    from research.dataset.chainlink_merge import asof_merge_chainlink
+    df = asof_merge_chainlink(df)
+
     # restore (slug, second) order for per-window rolling features
     df = df.sort_values(["slug", "seconds_into_window"], kind="mergesort").reset_index(drop=True)
 
@@ -88,7 +94,7 @@ def _enrich_symbol(symbol: str, timeframe: str, date_start: str, date_end: str,
     df["dist_strike_bps"] = np.divide(_diff, strike, out=np.full_like(_diff, np.nan),
                                       where=strike > 0) * 1e4
     g = df.groupby("slug", sort=False)["cb_spot"]
-    for w in (3, 10):
+    for w in (3, 10, 30):   # 30s added 2026-06-18 for tadiv offline re-score + divergence research
         lag = g.shift(w)
         df[f"spot_vel_{w}s_bps"] = (df["cb_spot"] / lag - 1.0) * 1e4
 

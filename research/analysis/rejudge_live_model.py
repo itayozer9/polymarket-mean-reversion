@@ -66,6 +66,14 @@ CONFIGS = {
                        ask_lo=0.55, ask_hi=0.80, vol_max=1.0),
     "fav_deepdown": dict(mode="consistent", t_lo=420, t_hi=480, dist_min=0.0,
                          ask_lo=0.88, ask_hi=0.93, restrict_fav_side="no"),
+    # tadiv (added 2026-06-18): offline proxy of the deployed tadiv_approx twins.
+    # APPROXIMATION — uses joined spot_vel_30s_bps (Δspot/spot) vs the engine's
+    # RollingMove.vel_bps(30) (Δdist/strike); <1% in-window. buy the 30s-move side
+    # when |v30|>=ret_min and sign(v10)==sign(v30). dist_min=0 (no distance gate).
+    "tadiv_approx_v1": dict(mode="tadiv", t_lo=60, t_hi=300, dist_min=0.0,
+                            ask_lo=0.30, ask_hi=0.55, ret_min=5.0),
+    "tadiv_approx_ret3_v1": dict(mode="tadiv", t_lo=60, t_hi=300, dist_min=0.0,
+                                 ask_lo=0.30, ask_hi=0.55, ret_min=3.0),
 }
 
 
@@ -95,6 +103,20 @@ def decisions_for(name: str, b: pd.DataFrame) -> pd.DataFrame:
         m &= ~b["consistent"].fillna(True).astype(bool)
         c = b[m].copy()
         by = (c["dist_strike_bps"] > 0).to_numpy()
+        ud_ask = np.where(by, c["yes_best_ask"].to_numpy("f8"),
+                          1.0 - c["yes_best_bid"].to_numpy("f8"))
+        keep = ((ud_ask >= cfg["ask_lo"]) & (ud_ask <= cfg["ask_hi"])
+                & np.isfinite(ud_ask))
+        c, by, ud_ask = c[keep], by[keep], ud_ask[keep]
+        c["buy_yes"] = by
+        c["entry_ask"] = ud_ask
+    elif cfg["mode"] == "tadiv":
+        # buy the 30s-spot-move side when |v30|>=ret_min and v10 agrees in sign.
+        v30, v10 = b["spot_vel_30s_bps"], b["spot_vel_10s_bps"]
+        m &= ((v30.abs() >= cfg["ret_min"]) & (np.sign(v30) == np.sign(v10))
+              & v30.notna() & v10.notna())
+        c = b[m].copy()
+        by = (c["spot_vel_30s_bps"] > 0).to_numpy()
         ud_ask = np.where(by, c["yes_best_ask"].to_numpy("f8"),
                           1.0 - c["yes_best_bid"].to_numpy("f8"))
         keep = ((ud_ask >= cfg["ask_lo"]) & (ud_ask <= cfg["ask_hi"])
