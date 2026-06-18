@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from mean_reversion_live.config import get_settings
+from research.analysis.resettle_chainlink import chainlink_outcome_by_slug
 
 OUT = os.path.join("data", "research", "official_outcomes.parquet")
 
@@ -88,11 +89,11 @@ def build_official_outcomes(slugs, out: str = OUT, max_workers: int = 16) -> pd.
     return df
 
 
-def official_outcome_by_slug(out: str = OUT) -> pd.DataFrame:
+def official_outcome_by_slug(out: str | None = None) -> pd.DataFrame:
     """slug -> cl_up (1/0), preferring the OFFICIAL outcome; falls back to the reconstructed
     Chainlink (resettle_chainlink) for slugs with no official outcome (unresolved / not cached).
     Prints the coverage so a low official-coverage range is visible, not silent."""
-    from research.analysis.resettle_chainlink import chainlink_outcome_by_slug
+    out = OUT if out is None else out
     recon = chainlink_outcome_by_slug()                       # [slug, cl_up]
     if not os.path.exists(out):
         print("[official_outcomes] no cache yet -> using reconstructed Chainlink (run the backfill)")

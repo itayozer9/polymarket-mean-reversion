@@ -31,6 +31,7 @@ import pandas as pd
 
 from research.analysis.loss_patterns import _base, JOINED, STAKE
 from research.analysis.resettle_chainlink import chainlink_outcome_by_slug
+from research.dataset.official_outcomes import official_outcome_by_slug
 from research.lib.stats import window_clustered_bootstrap
 from research.lib.rigor import (
     combinatorial_purged_cv, deflated_sharpe_ratio, daily_pnl_from_ledger)
@@ -77,8 +78,8 @@ def load_base() -> pd.DataFrame:
 
 @functools.lru_cache(maxsize=1)
 def cl_outcomes() -> pd.DataFrame:
-    """slug -> cl_up (Chainlink Up/Down — the Polymarket-true outcome)."""
-    return chainlink_outcome_by_slug()
+    """slug -> cl_up (official Polymarket on-chain outcome; reconstructed Chainlink fallback)."""
+    return official_outcome_by_slug()
 
 
 @functools.lru_cache(maxsize=1)
