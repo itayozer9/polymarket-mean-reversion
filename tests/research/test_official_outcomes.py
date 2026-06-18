@@ -44,3 +44,25 @@ def test_cl_outcomes_uses_official(monkeypatch, tmp_path):
     assert out["A"] == 0     # official overrides recon
     assert out["B"] == 1     # missing official -> reconstructed fallback
     el.cl_outcomes.cache_clear()
+
+
+def test_official_matches_real_money_settlements():
+    """official outcome must equal the booked outcome for every traded slug (real-money truth)."""
+    import json, os, pandas as pd
+    from research.dataset.official_outcomes import fetch_official_outcome
+    path = "data/live/settlements.jsonl"
+    if not os.path.exists(path):
+        import pytest; pytest.skip("no settlements.jsonl")
+    rows = [json.loads(l) for l in open(path) if l.strip()]
+    s = pd.DataFrame(rows)
+    s = s[s.get("backfill") != True] if "backfill" in s.columns else s
+    s = s.dropna(subset=["slug", "outcome"])
+    booked = {sl: str(g["outcome"].iloc[0]).upper() for sl, g in s.groupby("slug")}
+    mism = []
+    for slug, want in booked.items():
+        got = fetch_official_outcome(slug)
+        if got is None:
+            continue                      # transient/unresolved at fetch time — skip, don't fail
+        if got != ("UP" if want in ("UP", "YES") else "DOWN"):
+            mism.append((slug, got, want))
+    assert not mism, f"official-vs-booked mismatches ({len(mism)}): {mism[:5]}"

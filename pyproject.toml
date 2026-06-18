@@ -17,6 +17,8 @@ dependencies = [
     "pyarrow>=15.0",
     "matplotlib>=3.8",
     "scikit-learn>=1.4",
+    "orjson>=3.11.5",
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
