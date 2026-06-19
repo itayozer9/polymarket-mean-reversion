@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-06-19 — HONEST-SETTLEMENT FIX: research labels were ~4:1 optimistic; on true settlement NO edge survives
+
+The deepest finding of the project. Diagnosing "can we fix the strategies to be profitable?" surfaced
+that the WHOLE research stack settled on a RECONSTRUCTED Chainlink outcome (`cl_end>=cl_start` from
+as-of prices) that disagrees with Polymarket's OFFICIAL on-chain resolution on **6.5% of all windows /
+~17% of traded near-strike windows, ~4:1 optimistically biased**. Verified vs settlements.jsonl
+(real-money book): official-settled paper ≈ live-realized (fill drag ≈ $0) → the loss is the SIGNAL,
+not execution. This mislabel (+ stale-book inflation + Coinbase-vs-Chainlink gap) is why we deployed
+−$170 of phantom edges. Plan: ~/.claude/plans/ok-we-are-running-mutable-meteor.md +
+docs/superpowers/{specs,plans}/2026-06-18-honest-settlement-*. Doc: docs/research/HONEST_SETTLEMENT_2026-06-18.md.
+
+**FIX SHIPPED (branch honest-settlement, parity-validated):** `research/dataset/official_outcomes.py`
+fetches the official outcome (/markets?slug=X&closed=true → outcomePrices, the executor's parse) for
+every window slug; `edge_lab.cl_outcomes()` (the single settle point for ALL backtests/sweeps/re-scores)
+now returns official, recon fallback. PARITY TEST: official == real-money booked outcome 288/288, 0
+mismatches. Backfill: rate-limited at 16 workers (27% cov) → retry+backoff+lower concurrency → 100%
+(10,265 slugs). 7 tests green.
+
+**HONEST VERDICT (official settlement, clean data):**
+- Deployed/paper strategies: ALL breakeven-to-negative. det_lwd_live −$0.10/fill (was +$0.48 on recon);
+  fav_momentum −$0.58 (the "only passer" at +$0.55 = pure mislabel); fav_lowvol/deepdown/tadiv all neg.
+- FULL SWEEP re-run on honest labels (2,681 hypotheses): **ZERO survivors** (futN>=30 ∧ futCI-lo>0 ∧
+  seed-robust ∧ non-dup). Positive point-estimates are all thin-future det-family (n=3-7); specs with
+  enough future fills (psettle/ta_divergence n=39-167) are negative. No deploy-paper-candidate.
+- PROGRAM-SUCCESS bar met by NOTHING. The book-lag/determinism/disagree/fav/psettle/TA families are all
+  gone under honest settlement — the historical "edges" were artifacts.
+
+**DECISION (user):** KEEP det_lwd_live live at $5 / $25 cap as a breakeven forward-measurement PROBE
+(no change — already exactly that; it's breakeven not bleeding). No other real money. The honest
+apparatus stays running to find a REAL edge (every future hunt is now trustworthy — labels match money).
+
+**RESTART (mid-session, user's computer rebooted):** all bots restored — run_combined (paper+data),
+live_executor --live (det_lwd_live only, guards on, $604 pUSD funded, no geoblock), claim daemon. NOTE:
+executor + claim daemon run via uv `--no-project --with py-clob-client-v2 ...` (ephemeral deps, NOT the
+project venv) — a Task-3 `uv sync` pruned project-venv packages but did NOT affect them. Honest sweep
+re-run from scratch after the crash killed it at 391/2681.
+
+**NEXT (deferred, ~when a real edge appears):** fill-model live-2 recal; the honest apparatus is ready
+for a NEW edge-hunt (more coins btc/eth/sol/xrp+bnb/doge/hype, or non-book-lag families) — now that
+labels are honest. Memory: [[clean-data-reckoning-2026-06-18]] updated; new [[honest-settlement-fix]].
+
+---
+
 ## 2026-06-18 — DE-STALED RECKONING: 3 live strategies KILLED/DEMOTED, only det_lwd_live left live
 
 User asked for a full "what's working / not / needs time" verdict + path forward to profitable
