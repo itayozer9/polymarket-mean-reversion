@@ -559,3 +559,72 @@ structure invisible (TA can't see the seconds-scale manual edge). (2) clean-futu
 the FORWARD paper run is the firm validator. Deploy gate for any survivor = paper twin (live:false),
 >=7 clean forward days realized EV/fill CI-lower > 0 before any live talk. Doc: docs/research/
 TA_STRATEGIES_2026-06-16.md.
+
+## HONEST EDGE HUNT v2 — THEORY-FIRST CAMPAIGN (pre-registered 2026-07-02)
+Everything below is decided BEFORE any post-06-18 number is looked at. Labels are OFFICIAL
+on-chain outcomes ONLY (data/research/official_outcomes.parquet; official_only_by_slug for 5m —
+no recon fallback exists for 5m). Honest re-settle of paper ledgers: research/analysis/
+resettle_official.py (parity-pinned to real money in tests/research/test_resettle_official.py).
+
+VIRGIN BLOCK (frozen): entries >= 2026-06-19 00:00 UTC. The 06-18/19 honest sweep revealed
+everything through 06-18 for all 2,681 specs + all deployed configs; 06-19→now has never been
+read by any selection. DEGRADED era (06-05→06-12 11:00 UTC) excluded from every verdict;
+pre-06-13 entries keep the sec>=35 / s5>=capture causal filters. Discovery for any NEW family
+uses <= 06-18 only; the virgin block is revealed ONCE per theory.
+
+FILL MODEL: live-2 (recalibrated this campaign on all clean attempts >= 06-12 11:00 UTC,
+holdout = most recent week of fills; version string pinned in each verdict). v2 idealized
+bracket reported alongside. Stakes $5. Multiple testing: BH-FDR 10% WITHIN each theory's
+pre-declared spec set. Statistics: window-clustered bootstrap (slug clusters), 5-seed
+robustness where sampling is stochastic, Jaccard < 0.5 vs deployed/live decision sets.
+
+T1 CROSS-BOOK 5m↔15m (internal-consistency arbitrage; strongest prior — relative value, not
+prediction). (a) Score the ALREADY-REGISTERED xb_5m15m_causal_v1 gate on the official-settled
+forward ledger (~20 causally-clean days): PASS = realized EV/fill CI-lo > 0 AND n >= 30 →
+propose $5 live probe to user; KILL = CI-hi < 0 OR (EV < 0 AND n >= 40); else MEASURE-ON with
+hard expiry 2 more weeks. (b) NEW fam_xh_* sweep via research/dataset/xbook.py: all 3
+constituent 5m windows per 15m window, executable bound-violation margins BOTH directions
+(5m-off-15m never tested), guards: asof-backward join >= 1s embargo, both legs book_healthy
+AND 5m tick age <= 3s, filters never touch outcome columns; discovery <= 06-18, ONE virgin
+reveal; gates: virgin n >= 30, CI-lo > 0, seed-robust, live-2 fills, BH 10%, Jaccard < 0.5
+vs xb twin (must beat xb on common slugs or trade different slugs). Door-closing: no survivor
+AND (a) <= neutral ⇒ cross-horizon family CLOSED.
+
+T2 RESIDUAL DETERMINISM AT THE FEE FRONTIER. (a) Re-verify the FROZEN re-test set — the
+2026-06-18 sweep shortlist ∪ every spec future-positive at that reveal (det_0066, det_0028,
+det_0024, + shortlist survivors as archived in data/research/hypotheses/) — via
+hypothesis_verify --fill-model live, --future-start 2026-06-19. Selection NOT re-run; this is
+the second and FINAL look. Gates: virgin n >= 30 AND CI-lo > 0 AND BH-FDR 10% across the whole
+re-test set AND consistency leg full clean-future (06-13→now) CI-lo > 0. Practical thin-n rule:
+virgin n < 20 (~13 virgin days) = < 1.5 tr/day = below the $2/day success bar even if real ⇒
+KILLED. (b) Honest virgin re-score of all ~24 paper strategies from resettle_official:
+KILL twin = virgin CI-hi < 0 OR (EV < 0 AND n >= 40); PROMOTE-candidate = CI-lo > 0 AND
+n >= 30 AND Jaccard < 0.5. det_lwd_live stop-recommendation rule: official-settled realized
+<= -$0.50/fill AND CI-hi < 0 over the clean era → recommend stop (user decides).
+Door-closing: zero survivors ⇒ det/book-lag family CLOSED PERMANENTLY (no third look, ever).
+
+T3 HONEST MISPRICING MAP. edge_atlas rebuilt on official labels + live-2 costs; build set
+<= 06-18; candidate cells pre-declared via the atlas's BH-family machinery (10%); ONE
+--reveal-future on the virgin block. Separately for 15m and (first ever) 5m. Survivor cell →
+composed spec → hypothesis_verify --fill-model live funnel (same gates as T2a). Door-closing:
+no cost-clearing cell ⇒ static-mispricing door CLOSED for that timeframe.
+
+T4 UNINFORMED-FLOW FADE (raw CLOB prints — never mined; prior flow deaths were book-derived).
+research/dataset/trade_prints.py per-(slug,second) features from data/live_trades: burst shape
+(2s vs 30s counts), print-size distribution (p90/max single), aggressor imbalance at executable
+prices, fee-tier-weighted flow, post-burst fade timers. Guards: only prints with ts <=
+tick_ts - 2s; trade-id dedupe; shift-invariance test (delaying all prints +5s must not change
+any entry decision's causality). ONE bounded fam_flow2 sweep, discovery <= 06-18, ONE virgin
+reveal, gates as T1b. Door-closing: zero survivors ⇒ flow door CLOSED for book- AND
+print-derived signals, permanently.
+
+NOT PURSUED (dead list stands): mean-reversion/martingale, maker, staleness-at-expiry,
+print-prediction models, TA, sq family, fav family, early/near-strike fades, macro overlays
+(conditioning re-check only if a base edge emerges), z-score, Kelly/variable sizing,
+cross-coin lead-lag, ML meta-labels. Manual-trade records permanently unavailable (user).
+
+DELIVERABLE: docs/research/EDGE_HUNT_V2_2026-07.md with per-theory verdicts. Any survivor →
+evidence → USER SIGN-OFF → $5 guarded live probe. If all four die: verdict doc states which
+mechanisms are closed and why; remaining options are structural (other venues/market types,
+out of scope). Success = any robustly positive daily EV (even $2-5/day) on honest labels +
+live-2 fills.

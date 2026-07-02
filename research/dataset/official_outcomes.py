@@ -98,6 +98,22 @@ def build_official_outcomes(slugs, out: str = OUT, max_workers: int = 6) -> pd.D
     return df
 
 
+def official_only_by_slug(out: str | None = None) -> pd.DataFrame:
+    """slug -> official_up (1/0) from the raw official cache ONLY — no recon merge.
+
+    `official_outcome_by_slug()` below left-merges official onto the *reconstructed* frame,
+    which silently drops every slug absent from the 15m joined frame — i.e. ALL 5m slugs.
+    5m consumers (and anything that must never mix labels) use this function exclusively.
+    Rows with a NaN outcome (unresolved at fetch time) are dropped, not imputed."""
+    out = OUT if out is None else out
+    if not os.path.exists(out):
+        raise FileNotFoundError(f"no official outcome cache at {out} — run the backfill first")
+    off = pd.read_parquet(out)
+    off = off[off["official_up"].notna()].copy()
+    off["official_up"] = off["official_up"].astype(int)
+    return off[["slug", "official_up"]]
+
+
 def official_outcome_by_slug(out: str | None = None) -> pd.DataFrame:
     """slug -> cl_up (1/0), preferring the OFFICIAL outcome; falls back to the reconstructed
     Chainlink (resettle_chainlink) for slugs with no official outcome (unresolved / not cached).
@@ -116,13 +132,51 @@ def official_outcome_by_slug(out: str | None = None) -> pd.DataFrame:
     return m[["slug", "cl_up"]]
 
 
+def slugs_from_outcomes_csv(timeframes: tuple[str, ...] = ("15m",),
+                            since: str | None = None,
+                            until: str | None = None) -> list[str]:
+    """Window slugs from data/outcomes.csv (the bot's own settle log) — available for every
+    window the collector saw, so labels can LEAD the joined-frame rebuild instead of trailing it.
+    Timeframe from window_end_ts - window_start_ts (300s=5m, 900s=15m); since/until are UTC
+    dates filtering on window_start_ts."""
+    oc = pd.read_csv(os.path.join("data", "outcomes.csv"),
+                     usecols=["market_slug", "window_start_ts", "window_end_ts"])
+    dur = oc["window_end_ts"] - oc["window_start_ts"]
+    tf = dur.map({300: "5m", 900: "15m"})
+    m = tf.isin(timeframes)
+    if since:
+        m &= oc["window_start_ts"] >= pd.Timestamp(since, tz="UTC").timestamp()
+    if until:
+        m &= oc["window_start_ts"] < (pd.Timestamp(until, tz="UTC") + pd.Timedelta(days=1)).timestamp()
+    return oc.loc[m, "market_slug"].dropna().unique().tolist()
+
+
 def main() -> str:
-    from research.analysis.edge_lab import JOINED
-    slugs = pd.read_parquet(JOINED, columns=["slug"])["slug"].dropna().unique().tolist()
-    print(f"[official_outcomes] backfilling {len(slugs):,} slugs ...")
-    df = build_official_outcomes(slugs)
-    cov = df["official_up"].notna().mean() * 100
-    print(f"[official_outcomes] wrote {len(df):,} -> {OUT}  (resolved {cov:.1f}%)")
+    import argparse
+    ap = argparse.ArgumentParser(description="Backfill official on-chain outcomes per slug")
+    ap.add_argument("--timeframes", default="15m",
+                    help="comma list of 15m,5m (default 15m)")
+    ap.add_argument("--since", default=None, help="UTC date lower bound on window_start (incl.)")
+    ap.add_argument("--until", default=None, help="UTC date upper bound on window_start (incl.)")
+    ap.add_argument("--source", choices=["outcomes", "joined"], default="outcomes",
+                    help="slug source: data/outcomes.csv (default) or the joined 15m frame")
+    ap.add_argument("--max-workers", type=int, default=6,
+                    help="fetch concurrency (16 hit Gamma rate limits; 6 is safe)")
+    args = ap.parse_args()
+
+    if args.source == "joined":
+        from research.analysis.edge_lab import JOINED
+        slugs = pd.read_parquet(JOINED, columns=["slug"])["slug"].dropna().unique().tolist()
+    else:
+        tfs = tuple(t.strip() for t in args.timeframes.split(",") if t.strip())
+        slugs = slugs_from_outcomes_csv(tfs, args.since, args.until)
+    print(f"[official_outcomes] backfilling {len(slugs):,} slugs "
+          f"(tf={args.timeframes} since={args.since} until={args.until} src={args.source}) ...")
+    df = build_official_outcomes(slugs, max_workers=args.max_workers)
+    sel = df[df["slug"].isin(set(slugs))]
+    cov = sel["official_up"].notna().mean() * 100 if len(sel) else float("nan")
+    print(f"[official_outcomes] cache now {len(df):,} slugs -> {OUT}  "
+          f"(this batch: {len(sel):,} slugs, resolved {cov:.1f}%)")
     return OUT
 
 
