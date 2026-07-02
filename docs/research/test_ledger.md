@@ -650,3 +650,19 @@ Reveal per the pre-registered rules above. Scoreboard: data/research/paper_offic
   theoretical 0.07·p·(1-p) -> all honest EVs above are CONSERVATIVE.
 REMAINING GATE for the fav_disagree family: live-2 guarded fill scoring on the
 virgin window (rejudge driver) + Jaccard vs live roster; then user decision.
+
+### EDGE HUNT v2 — T2 FINAL VERDICT (2026-07-02 ~23:50 IDT)
+LIVE-FILL GATE (live-2 guarded, $5, on the twins' RECORDED virgin decisions — the
+engine's actual decision stream, entry_ask/ask_depth_usd/time_left per trade; 5 seeds):
+  fav_disagree       fills 80/122 (66%)  EV/fill +2.289 [+1.248,+3.294]  seeds sd 0.13
+  fav_disagree_live  fills 44/79  (56%)  EV/fill +2.573 [+1.022,+3.975]  seeds sd 0.63
+  fav_disagree_d5    fills 282/436(65%)  EV/fill +0.601 [+0.054,+1.142]  seeds sd 0.20
+  ≈ +$8-13/day each at $5 stakes. Jaccard vs det_lwd_live virgin slugs: 0.07-0.11.
+ALL REGISTERED GATES PASS for the fav_disagree family: official labels ✓ virgin
+CI-lo>0 ✓ BH-FDR 10% ✓ consistency leg ✓ live-2 fills + seed-robust ✓ Jaccard<0.5 ✓.
+=> Family is the campaign's PROMOTE candidate. Real-money re-arm requires USER
+sign-off (locked decision). Pre-registered stop rule if armed: official-settled
+realized <= -$0.50/fill with CI-hi < 0 => stop; $5/trade, $25/UTC-day, existing
+per-strategy bankroll isolation.
+NOTE: monolithic frame rebuild externally SIGKILLed twice (not OOM; 63% RAM free);
+switched to resumable research/build_joined_chunked.py (parts cache).
