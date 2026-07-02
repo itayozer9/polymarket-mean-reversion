@@ -628,3 +628,25 @@ evidence → USER SIGN-OFF → $5 guarded live probe. If all four die: verdict d
 mechanisms are closed and why; remaining options are structural (other venues/market types,
 out of scope). Success = any robustly positive daily EV (even $2-5/day) on honest labels +
 live-2 fills.
+
+### EDGE HUNT v2 — INTERIM VERDICTS (T2b paper re-score, revealed 2026-07-02)
+Reveal per the pre-registered rules above. Scoreboard: data/research/paper_official/.
+- BH-FDR 10% over 24 virgin blocks (one-sided clustered bootstrap p): SURVIVORS =
+  fav_disagree_live(p=.00025) fav_disagree(.00025) fav_disagree_d5(.0025)
+  det_d12_dual_v1(.004) det_d12_wide_live(.012) det_d12_wide_v1(.013).
+  fav_lowvol first loser (.032 vs .029 threshold).
+- CONSISTENCY LEG (full clean-future 06-12..07-02 CI-lo>0):
+  fav_disagree_live +1.93 [+0.88,+3.01] n=113 PASS; fav_disagree +2.70 [+1.07,+4.35]
+  n=159 PASS; fav_disagree_d5 +1.05 [+0.26,+1.82] n=591 PASS.
+  det_d12_dual_v1/-wide_v1/-wide_live/fav_lowvol FAIL (virgin-fortnight riders).
+- KILLED by rule (virgin CI-hi<0 or EV<0 n>=40): oracle_fade_v1, tadiv_approx_v1,
+  tadiv_approx_ret3_v1, det_sqp_v1, det_sqp_v2, fav_deepdown, early_disagree_v1.
+- T1a xb gate: virgin +1.04 [-0.65,+2.87] n=130 -> NOT passed (MEASURE-ON expired;
+  door decided by fam_xh reveal).
+- Code-boundary check: uncommitted engine tree is mtime Jun 9-13 — clean and virgin
+  eras ran IDENTICAL code; the era flip is market/sample, not pipeline.
+- FEE FACT (checked 2026-07-02): live pays ZERO fees (348,600/348,600 prints at
+  fee_rate_bps=0; no fee field in fills.jsonl). pnl_official subtracts the engine's
+  theoretical 0.07·p·(1-p) -> all honest EVs above are CONSERVATIVE.
+REMAINING GATE for the fav_disagree family: live-2 guarded fill scoring on the
+virgin window (rejudge driver) + Jaccard vs live roster; then user decision.
