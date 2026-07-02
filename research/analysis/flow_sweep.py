@@ -155,7 +155,16 @@ def reveal() -> None:
     off = {k: int(v) for k, v in
            dict(zip(*official_only_by_slug().to_numpy().T)).items()}
     params = load_params()
-    print(f"[flow:reveal] ONE virgin reveal for {len(short)} specs")
+    # registered overlap gate: a flow spec must trade DIFFERENT windows than the
+    # deployed det/disagree families, else it just re-labels them (the known trap)
+    det_slugs = set()
+    for sid in ("det_lwd_v1", "fav_disagree", "det_d12_wide_v1"):
+        p = os.path.join(REPO, "data", "research", "paper_official", f"{sid}.parquet")
+        if os.path.exists(p):
+            tw = pd.read_parquet(p, columns=["slug", "era"])
+            det_slugs |= set(tw[tw["era"] == "virgin"]["slug"])
+    print(f"[flow:reveal] ONE virgin reveal for {len(short)} specs "
+          f"(overlap ref: {len(det_slugs)} det-family virgin slugs)")
     out = []
     for sp in short:
         sp["tl"] = tuple(int(v) for v in sp["tl"].strip("()").replace(" ", "").split(","))
@@ -172,8 +181,10 @@ def reveal() -> None:
         lo, mid, hi = window_clustered_bootstrap(t0["pnl"].values, t0["slug"].values, n=2000)
         p = _boot_p(t0["pnl"].values, t0["slug"].values)
         seeds = np.array(per_seed, dtype=float)
+        mine = set(t0["slug"])
+        jac = (len(mine & det_slugs) / len(mine | det_slugs)) if det_slugs else 0.0
         out.append(dict(spec=sp["spec"], n=int(len(t0)), ev=float(t0["pnl"].mean()),
-                        ci_lo=lo, ci_hi=hi, p=p,
+                        ci_lo=lo, ci_hi=hi, p=p, jaccard=round(jac, 3),
                         seed_ok=bool(np.nanmean(seeds) - 2 * np.nanstd(seeds) > 0),
                         wr=float(t0["won"].mean())))
     d = pd.DataFrame(out)
@@ -181,7 +192,8 @@ def reveal() -> None:
     m = max(len(scored), 1)
     passing = scored[scored["p"] <= (scored.index + 1) / m * 0.10]
     thr = passing["p"].max() if len(passing) else 0.0
-    d["survives"] = (d["p"] <= thr) & (d["n"] >= 30) & (d["ci_lo"] > 0) & d["seed_ok"]
+    d["survives"] = ((d["p"] <= thr) & (d["n"] >= 30) & (d["ci_lo"] > 0) & d["seed_ok"]
+                     & (d["jaccard"] < 0.5))
     d.to_parquet(os.path.join(OUT_DIR, "virgin_verdicts.parquet"), index=False)
     with open(os.path.join(OUT_DIR, "verdicts.md"), "w") as f:
         f.write("# fam_flow2 virgin reveal (ONE look)\n\n"
