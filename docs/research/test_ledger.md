@@ -693,3 +693,14 @@ tl 450-900s, ask 0.30-0.40, Chainlink-dist gate 2-25bps (engine oracle_gate mach
 standard twin gate (>=14 virgin-forward days, official-settled CI-lo>0) before any live
 talk. NOTE: the composed spec's numbers on the ALREADY-REVEALED virgin block are
 descriptive only (cell-level reveal was the one look); the twin's FORWARD record is the test.
+
+### EDGE HUNT v2 — T1 VERDICT (fam_xh virgin reveal, 2026-07-03)
+Clean rediscovery (degraded epoch excluded): 145/1280 shortlisted, dominated by the
+never-tested 5m-instrument legs (5y/5n) at +$2-11/fill discovery EV. ONE VIRGIN REVEAL:
+0/145 SURVIVE. The g>=10bps monsters collapse to n=1-7 forward (discovery-era frequency
+inflation; below the 1.5 tr/day practical bar). The g=2bps 5y specs carry virgin volume
+(n=60-87, EV +$1.3-1.6, CI-lo>0, seed-ok, Jaccard 0.15-0.24) but FAIL BH-FDR 10% across
+the revealed set — individually suggestive, not survivors. Registered door-closing rule
++ T1a xb gate <= neutral both fire: CROSS-HORIZON DOOR CLOSED. Any revisit requires a
+NEW pre-registration on genuinely new forward data (>= +3 weeks).
+Artifacts: data/research/hypotheses/xh_sweep/{discovery.parquet,virgin_verdicts.parquet}.
