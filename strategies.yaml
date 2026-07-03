@@ -1474,12 +1474,13 @@
 # EV (0.50-0.90 entries LOSE: -$29/24tr 46% WR; edge lives <=0.45; 0.05-0.20 jackpot tail kept per
 # sq-deep-tail-floor lesson) + live-model rejudge (ask<=0.45: future +$3.54/fill [1.99,5.11] vs
 # +$1.67 at 0.90). 0.45 also bounds the executor chase band + lets the notional guard deploy the
-# full $5 at typical ~0.40 entries. Guards stay SHADOW for this sid (floor-abort semantics were
+# full stake at typical ~0.40 entries. Guards stay SHADOW for this sid (floor-abort semantics were
 # calibrated on det; an ask drop is ambiguous for disagree — collect its own cohort first).
 - id: fav_disagree_live
-  name: "Fav-disagree LIVE ($5/trade real money; tl 120-360s, |dist|>=10bps, buy spot side ask 0.05-0.45, hold; live-model future +$3.54/fill; $50/day hard cap, $100 bankroll)"
+  name: "Fav-disagree LIVE ($10/trade real money; tl 120-360s, |dist|>=10bps, buy spot side ask 0.05-0.45, hold; live-model future +$3.54/fill @$5; $50/day hard cap, $100 bankroll)"
   enabled: true
   live: true    # RE-ARMED 2026-07-02 (Edge Hunt v2, user-approved): passed ALL honest gates — official labels, virgin BH-FDR (p=.00025), consistency leg (+$1.93/fill full clean-future), live-2 guarded fills (+$2.57/fill, 56% fill, seed-robust). The 06-18 kill was an n=34 small-sample verdict. Stop rule: official-settled <= -$0.50/fill with CI-hi<0.
+                # SIZED $5->$10 2026-07-03 (user-approved, staged): size-curve sim on recorded virgin decisions = +$17.9/day @$10 (fills hold ~56%). Cap unchanged $50/day (5 losses trips). Review after ~1wk of real $10 fills; adverse selection at size unmeasured.
   type: determinism
   starting_capital_usd: 100.0
   timeframe: "15m"
@@ -1492,7 +1493,7 @@
     entry: {side: "BOTH", entry_price_min: 0.05, entry_price_max: 0.45, drop_magnitude_pct: 0.0, drop_window_sec: 30, min_time_left_sec: 0, proximity_max_pct: 100.0, min_seconds_into_window: 0}
     exit:  {profit_target_pct: 0.0, stop_loss_pct: null, max_hold_sec: 900, trailing_stop_pct: null}
     filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
-    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 5.0}
+    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 10.0}
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 # ===== NEW 2026-06-05 — 2099-hypothesis sweep survivor (docs/research/HYPOTHESIS_SWEEP_2026-06-05.md) =====
 # The ONLY genuinely-new deployable edge from a 2099-hypothesis latency-proof sweep (Chainlink-settled,
