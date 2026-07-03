@@ -704,3 +704,16 @@ the revealed set — individually suggestive, not survivors. Registered door-clo
 + T1a xb gate <= neutral both fire: CROSS-HORIZON DOOR CLOSED. Any revisit requires a
 NEW pre-registration on genuinely new forward data (>= +3 weeks).
 Artifacts: data/research/hypotheses/xh_sweep/{discovery.parquet,virgin_verdicts.parquet}.
+
+### EDGE HUNT v2 — IMPROVEMENT AXES (pre-registered 2026-07-03 ~12:45 UTC)
+Read from ALREADY-REVEALED virgin data (design inputs for forward-tested twins, not new claims):
+1. SIZE CURVE (fav_disagree_live recorded decisions, live-2 guarded, 5-seed): $5=+$11.5/day,
+   $10=+$17.9, $15=+$24.6, $20=+$29.0 — fills stay ~44-47/79 (partial-fill physics). Sizing
+   $5->$10 = pure execution change on the SAME signal; USER decision (staged, cap unchanged).
+2. CL-AGREE GATE: oracle_disagree entries are the losing slice (d5: agree +$1.85 n=385 vs
+   disagree -$0.21 n=50; live twin +$3.64 vs +$1.37). Twin fav_disagree_d5cl_v1 DEPLOYED
+   (d5 + oracle_gate agree); gate = 14 virgin-forward days, official-settled CI-lo>0.
+3. ASK BAND: volume lives 0.35-0.45 (+$2.39/fill n=220), 0.25-0.35 (+$6.82 n=44); <0.25
+   negligible n. No config change warranted.
+4. TIME BAND: earlier window (tl 450-900) testing via early_disagree_cl_v1 (atlas cells).
+Capacity lever NOT started: bnb/doge/hype collectors (engineering, separate decision).

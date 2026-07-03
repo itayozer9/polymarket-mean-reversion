@@ -1449,6 +1449,26 @@
     filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
     human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 10.0}
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
+# EDGE HUNT v2 refinement twin (pre-registered 2026-07-03): d5 volume + the Chainlink AGREE
+# gate. Virgin split showed oracle_disagree entries are the money-losing slice (d5: agree
+# +$1.85/fill n=385 vs disagree -$0.21 n=50; live twin: +$3.64 vs +$1.37) — same pattern the
+# dual-oracle gate exploited for det_d12. A/B vs fav_disagree_d5; standard 14-virgin-day
+# scoreboard gate (official-settled CI-lo>0) before any live talk.
+- id: fav_disagree_d5cl_v1
+  name: "Fav-disagree d5 + Chainlink-agree gate paper (tl 120-360s, dist>=5bps, ask 0.05-0.90, CL must agree with buy side)"
+  enabled: true
+  live: false
+  type: determinism
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  determinism: {mode: "disagree", t_min_sec: 120, t_max_sec: 360, dist_min_bps: 5.0, min_ask: 0.05, max_ask: 0.90, oracle_gate: "agree", max_daily_loss_usd: 50.0, daily_loss_mode: "hard_worstcase"}
+  sim_config:
+    entry: {side: "BOTH", entry_price_min: 0.05, entry_price_max: 0.90, drop_magnitude_pct: 0.0, drop_window_sec: 30, min_time_left_sec: 0, proximity_max_pct: 100.0, min_seconds_into_window: 0}
+    exit:  {profit_target_pct: 0.0, stop_loss_pct: null, max_hold_sec: 900, trailing_stop_pct: null}
+    filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
+    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 10.0}
+    fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
+
 # LIVE since 2026-06-10 (user-approved after the live-fill-model re-judging): the strongest edge on
 # the board under REAL fill physics. Band tightened 0.90->0.45 from the forward-paper entry-bucket
 # EV (0.50-0.90 entries LOSE: -$29/24tr 46% WR; edge lives <=0.45; 0.05-0.20 jackpot tail kept per
