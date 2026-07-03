@@ -666,3 +666,10 @@ realized <= -$0.50/fill with CI-hi < 0 => stop; $5/trade, $25/UTC-day, existing
 per-strategy bankroll isolation.
 NOTE: monolithic frame rebuild externally SIGKILLed twice (not OOM; 63% RAM free);
 switched to resumable research/build_joined_chunked.py (parts cache).
+
+### EDGE HUNT v2 — T4 VERDICT (fam_flow2 virgin reveal, 2026-07-03)
+Discovery (<=06-18): 11/432 shortlisted (10 follow / 1 fade). VIRGIN REVEAL: 0/11 survive
+(EV -0.61..+0.55, ALL CIs span 0, none pass seed-robustness at n>=30; virgin Jaccards
+0.01-0.18 — pure discovery-era overfits, not even det re-labels). Registered door-closing
+rule fires: FLOW DOOR CLOSED PERMANENTLY (book- AND print-derived signals).
+Artifacts: data/research/hypotheses/flow_sweep/{discovery.parquet,virgin_verdicts.parquet}.

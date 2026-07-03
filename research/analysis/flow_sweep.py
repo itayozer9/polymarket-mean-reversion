@@ -196,8 +196,9 @@ def reveal() -> None:
                      & (d["jaccard"] < 0.5))
     d.to_parquet(os.path.join(OUT_DIR, "virgin_verdicts.parquet"), index=False)
     with open(os.path.join(OUT_DIR, "verdicts.md"), "w") as f:
-        f.write("# fam_flow2 virgin reveal (ONE look)\n\n"
-                + d.sort_values(["survives", "ci_lo"], ascending=False).to_markdown(index=False))
+        f.write("# fam_flow2 virgin reveal (ONE look)\n\n```\n"
+                + d.sort_values(["survives", "ci_lo"], ascending=False).to_string(index=False)
+                + "\n```\n")
     print(d.sort_values(["survives", "ci_lo"], ascending=False).head(20).to_string(index=False))
     print(f"[flow:reveal] survivors: {int(d['survives'].sum())}/{len(d)}")
 
