@@ -121,6 +121,10 @@ def discover() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
     x = pd.read_parquet(XBOOK)
     x = x[x["date"] <= DISC_END]                       # virgin rows never touched here
+    # DEGRADED stale-book epoch (test_ledger): a starved WS wrote fresh-timestamped rows
+    # with FROZEN books — the age<=3s guard cannot catch it, and a stale 5m book fakes
+    # exactly the violations this family trades. Registered: excluded from every verdict.
+    x = x[(x["date"] < "2026-06-05") | (x["date"] >= "2026-06-13")]
     off = dict(zip(*official_only_by_slug().to_numpy().T))
     off = {k: int(v) for k, v in off.items()}
     params = load_params()
