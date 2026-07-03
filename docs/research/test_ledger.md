@@ -673,3 +673,23 @@ Discovery (<=06-18): 11/432 shortlisted (10 follow / 1 fade). VIRGIN REVEAL: 0/1
 0.01-0.18 — pure discovery-era overfits, not even det re-labels). Registered door-closing
 rule fires: FLOW DOOR CLOSED PERMANENTLY (book- AND print-derived signals).
 Artifacts: data/research/hypotheses/flow_sweep/{discovery.parquet,virgin_verdicts.parquet}.
+
+### EDGE HUNT v2 — T3 VERDICT (honest atlas, ONE virgin reveal, 2026-07-03)
+Splits: dev 05-23..31, holdout 06-01..04 + 06-13..18, degraded dropped, future = virgin
+>= 06-19; pre-06-13 sec<35 causal filter; official labels; live-2 slip. Artifacts:
+data/research/edge_atlas/ (pre-v2 backed up). 1,369 cells, BH family 885, candidates
++4/-62 (selected on dev+holdout ONLY, before reveal).
+- ALL 4 positive cells CONFIRM in virgin future — and all are ONE structure, the cheap
+  DISAGREE side mid-to-early window: a0.30-0.35 tl450-900 cl5-12 +35.2%/$1 (n=49);
+  a0.35-0.40 tl450-900 cl2-5 +27.7% (n=191); a0.30-0.35 tl300-450 cl5-12 +15.8% (n=34);
+  a0.45-0.50 tl450-900 cl12-25 +1.0% (n=410, weak).
+- Negative candidates confirm massively (cheap CONSISTENT longshots 5-15c near expiry:
+  -40..-56%/$1 future) — the structural loser funding the edge.
+=> The static-mispricing door re-finds the SAME disagree structure fav_disagree harvests,
+at EARLIER timing (the early_disagree region) conditioned on CHAINLINK distance 2-12bps
+(the twins gate on Coinbase dist>=10). No new orthogonal family.
+FOLLOW-UP (new pre-registration): refined early-disagree PAPER twin — mode=disagree,
+tl 450-900s, ask 0.30-0.40, Chainlink-dist gate 2-25bps (engine oracle_gate machinery),
+standard twin gate (>=14 virgin-forward days, official-settled CI-lo>0) before any live
+talk. NOTE: the composed spec's numbers on the ALREADY-REVEALED virgin block are
+descriptive only (cell-level reveal was the one look); the twin's FORWARD record is the test.
