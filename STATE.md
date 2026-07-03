@@ -36,8 +36,12 @@ $50/day hard_worstcase, existing book (realized −$66.5, bankroll backstop $100
 2026-07-03 ~07:40 UTC (wrapper pid 81447), executor untouched (pid 15413), det_lwd_live probe
 unchanged. Pre-registered stop rule: official-settled ≤ −$0.50/fill with CI-hi<0 → recommend stop.
 
-**Open (frames rebuilding in parts):** fam_xh discover+reveal (needs 5m frame), fam_flow2 reveal,
-honest atlas 15m+5m, EDGE_HUNT_V2_2026-07.md verdict doc, nightly_honest cron install.
+**CAMPAIGN CLOSED SAME DAY — all four theories decided** (doc: docs/research/EDGE_HUNT_V2_2026-07.md):
+T1 cross-horizon CLOSED (xb gate neutral; fam_xh 0/145 virgin survivors); T3 atlas = no new
+family, 4/4 virgin-confirmed cells ARE the cheap-disagree structure (follow-up paper twin
+early_disagree_cl_v1 deployed, CL-dist gate, 14-day standard gate); T4 flow CLOSED (0/11).
+Nightly honest scoreboard live via launchd 06:15 IDT. Engine restarted 08:50 UTC 07-03 with
+25 strategies. The ONE surviving edge = fav_disagree family, live at $5.
 
 ## 2026-06-19 — HONEST-SETTLEMENT FIX: research labels were ~4:1 optimistic; on true settlement NO edge survives
 

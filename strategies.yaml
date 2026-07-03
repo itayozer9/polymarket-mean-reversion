@@ -1414,6 +1414,26 @@
     filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
     human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 5.0}
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
+# EDGE HUNT v2 T3 follow-up (pre-registered test_ledger 2026-07-03): the honest atlas's 4
+# virgin-confirmed cells are all cheap-DISAGREE at tl 300-900s ask 0.30-0.40 conditioned on
+# CHAINLINK distance 2-12bps (the early_disagree twins gated Coinbase dist>=10 instead — the
+# wrong oracle for the gate). PAPER twin; standard gate (>=14 virgin-forward days,
+# official-settled CI-lo>0 via nightly scoreboard) before any live talk.
+- id: early_disagree_cl_v1
+  name: "Early-disagree CL-gated (atlas v2 cells: tl 450-900s, disagree, ask 0.30-0.40, Chainlink agree+dist>=2bps, hold)"
+  enabled: true
+  live: false
+  type: determinism
+  starting_capital_usd: 1000.0
+  timeframe: "15m"
+  determinism: {mode: "disagree", t_min_sec: 450, t_max_sec: 900, dist_min_bps: 0.0, min_ask: 0.30, max_ask: 0.40, oracle_gate: "agree_and_dist", cl_dist_min_bps: 2.0, max_daily_loss_usd: 10000.0, daily_loss_mode: "soft_settled"}
+  sim_config:
+    entry: {side: "BOTH", entry_price_min: 0.30, entry_price_max: 0.40, drop_magnitude_pct: 0.0, drop_window_sec: 30, min_time_left_sec: 0, proximity_max_pct: 100.0, min_seconds_into_window: 0}
+    exit:  {profit_target_pct: 0.0, stop_loss_pct: null, max_hold_sec: 900, trailing_stop_pct: null}
+    filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
+    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 5.0}
+    fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
+
 # FAV_DISAGREE dist 10->5 widening (sweep e4_1070: future +$2.21/fill live-model, covers 94.5% of
 # the deployed fav_disagree set + new volume). A/B twin vs the running fav_disagree.
 - id: fav_disagree_d5
