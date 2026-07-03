@@ -1439,7 +1439,7 @@
 - id: fav_disagree_live
   name: "Fav-disagree LIVE ($5/trade real money; tl 120-360s, |dist|>=10bps, buy spot side ask 0.05-0.45, hold; live-model future +$3.54/fill; $50/day hard cap, $100 bankroll)"
   enabled: true
-  live: false   # KILLED 2026-06-18 reckoning: clean EV -$1.18/fill, freq collapsed 38->7.3/actday, -$66 real money, still bleeding. Paper twin continues.
+  live: true    # RE-ARMED 2026-07-02 (Edge Hunt v2, user-approved): passed ALL honest gates — official labels, virgin BH-FDR (p=.00025), consistency leg (+$1.93/fill full clean-future), live-2 guarded fills (+$2.57/fill, 56% fill, seed-robust). The 06-18 kill was an n=34 small-sample verdict. Stop rule: official-settled <= -$0.50/fill with CI-hi<0.
   type: determinism
   starting_capital_usd: 100.0
   timeframe: "15m"

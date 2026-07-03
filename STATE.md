@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-07-03 — EDGE HUNT v2: honest apparatus completed; fav_disagree passes ALL gates → RE-ARMED live (user-approved)
+
+Theory-first campaign (pre-registered in test_ledger.md "HONEST EDGE HUNT v2"; plan
+~/.claude/plans/in-this-project-our-rippling-torvalds.md). Everything runs on official labels.
+
+**Foundation shipped (same day):** official labels extended to ALL 15m 05-23→07-02 + first-ever
+5m labels (31,238 clean-era windows, 100%) — cache 46,771 slugs; `resettle_official.py` re-settles
+every paper ledger on official outcomes nightly (`scripts/nightly_honest.sh`), parity-pinned to
+real money (tests/research/test_resettle_official.py 4/4); fill model **live-2** (580 clean
+attempts, 7d-holdout: predicted 53.9% vs observed 55.2% fill); xbook/trade_prints feature modules
+with look-ahead-guard unit tests (9/9); sealed discover/reveal sweeps `xh_sweep.py` (1,280 specs)
++ `flow_sweep.py` (432). Chunked resumable frame builder `research/build_joined_chunked.py`
+(monolithic build was externally SIGKILLed 3×, not OOM).
+
+**Verdicts (virgin block = entries ≥06-19, never seen by any selection):**
+- KILLED by rule: oracle_fade_v1, tadiv_approx_v1/_ret3, det_sqp_v1/v2, fav_deepdown, early_disagree_v1.
+- det_d12 family + fav_lowvol: pass virgin BH but FAIL the consistency leg (virgin-fortnight riders).
+- **fav_disagree family passes EVERYTHING**: virgin BH-FDR p=.00025-.0025; consistency leg
+  (full 06-12→07-02) +$1.05..+$2.70/fill CI-lo>0; live-2 guarded fills on recorded decisions
+  +$2.29/+$2.57/+$0.60 per fill (56-66% fill rate, seed-robust) ≈ +$8-13/day each at $5;
+  Jaccard vs det_lwd_live 0.07-0.11. The 06-18 kill was an n=34 small-sample verdict.
+- xb twin gate NOT passed (+$1.04, CI spans 0, n=130); fam_xh sweep decides the door.
+- fam_flow2 discovery: 11/432 shortlisted, 10 are `follow` (control) — re-label-of-det suspicion,
+  Jaccard gate added to reveal; reveal pending rebuilt frame.
+- **FEE FACT:** live pays ZERO fees (348,600/348,600 prints at 0bps) — all honest EVs conservative.
+- 5m oracle basis ≈10× 15m (0.65% of ≥20bps moves flip post-fix; 34.6% near-strike disagreement).
+
+**ACTION (user-approved via plan gate): `fav_disagree_live` re-armed `live:true` at $5/trade,
+$50/day hard_worstcase, existing book (realized −$66.5, bankroll backstop $100).** Engine restarted
+2026-07-03 ~07:40 UTC (wrapper pid 81447), executor untouched (pid 15413), det_lwd_live probe
+unchanged. Pre-registered stop rule: official-settled ≤ −$0.50/fill with CI-hi<0 → recommend stop.
+
+**Open (frames rebuilding in parts):** fam_xh discover+reveal (needs 5m frame), fam_flow2 reveal,
+honest atlas 15m+5m, EDGE_HUNT_V2_2026-07.md verdict doc, nightly_honest cron install.
+
 ## 2026-06-19 — HONEST-SETTLEMENT FIX: research labels were ~4:1 optimistic; on true settlement NO edge survives
 
 The deepest finding of the project. Diagnosing "can we fix the strategies to be profitable?" surfaced
