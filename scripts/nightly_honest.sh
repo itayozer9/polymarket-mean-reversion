@@ -7,6 +7,7 @@
 # (cron mail / status skill) can surface it.
 set -e
 cd "$(dirname "$0")/.."
+export PATH="$HOME/.local/bin:$PATH"  # launchd's PATH lacks uv
 
 SINCE=$(date -u -v-3d +%Y-%m-%d 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%d)
 
