@@ -1228,7 +1228,7 @@
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 - id: det_sqp_v1
   name: "Stale-quote pickoff v1 (Phase 2: mid-window, |model_p-mid| in [0.08,0.30] + spot jump>=8bps, hold). Higher-variance secondary edge."
-  enabled: true
+  enabled: false  # PRUNED 2026-07-06: KILLED by rule in Edge Hunt v2 honest-label reckoning (breakeven-to-negative on official outcomes; paper P&L was settle-oracle artifact). Roster cleanup to cut engine CPU.
   type: stale_quote
   starting_capital_usd: 1000.0
   timeframe: "15m"
@@ -1241,7 +1241,7 @@
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 - id: det_sqp_v1_capped
   name: "Stale-quote pickoff v1 — $50/day max-loss cap (higher-variance; live-candidate w/ risk control)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-06: sqp family KILLED by rule on honest labels (see det_sqp_v1).
   type: stale_quote
   starting_capital_usd: 1000.0
   timeframe: "15m"
@@ -1271,7 +1271,7 @@
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 - id: det_sqp_v2
   name: "Stale-quote v2 — v1 + loss filters (margin 0.12, skip dist>19bps)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-06: sqp family KILLED by rule on honest labels (see det_sqp_v1).
   type: stale_quote
   starting_capital_usd: 1000.0
   timeframe: "15m"
@@ -1288,7 +1288,7 @@
 # Verified +$13-36/tr OOS, 84% WR, all 4 coins, 15/15 CPCV folds. Capacity-limited (thin books).
 - id: det_disagree_v1
   name: "E4 disagreement-determinism (fade the book, buy cheap spot side, last 60s)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-25: -$119 over 14d on official labels (-$0.90/fill, n=132). Ledger freezes today. The disagree edge that works is the mid-window one (fav_disagree family, tl 120-360s), not this last-60s variant.
   type: determinism
   starting_capital_usd: 1000.0
   timeframe: "15m"
@@ -1303,7 +1303,7 @@
 # to data/live/intents.jsonl). $50/day hard_worstcase cap (free safety; det never trips it).
 # The standalone executor (scripts/live_executor.py, Python 3.11) places the real orders.
 - id: det_lwd_live
-  name: "Determinism v2 LIVE probe ($5/trade real money; dist>=8bps locked-favourite filter for Chainlink; $25/day hard cap)"
+  name: "Determinism v2 LIVE probe ($2/trade real money; dist>=8bps locked-favourite filter for Chainlink; $25/day hard cap)"
   enabled: true
   live: true
   type: determinism
@@ -1314,7 +1314,13 @@
     entry: {side: "BOTH", entry_price_min: 0.50, entry_price_max: 0.90, drop_magnitude_pct: 0.0, drop_window_sec: 30, min_time_left_sec: 0, proximity_max_pct: 100.0, min_seconds_into_window: 0}
     exit:  {profit_target_pct: 0.0, stop_loss_pct: null, max_hold_sec: 900, trailing_stop_pct: null}
     filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
-    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 5.0}
+    # SIZED $5 -> $2 on 2026-07-25 (user-approved). -$30.40 over its last 12 traded days;
+    # +$0.078/fill lifetime over 433 fills; official clean-era EV -$0.128/fill. Its registered
+    # stop rule (<= -$0.50/fill with CI-hi<0) is NOT tripped, so this is a SIZE decision, not a
+    # kill: it stays the always-on execution canary (88% of live intents — the thing that
+    # surfaces geoblocks, stale books and ladder defects fast) at ~40% of the bleed. Cap and
+    # bankroll deliberately unchanged. Revisit if July's regime reverses or the rule trips.
+    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 2.0}
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 # ===== NEW 2026-06-05 — VERIFIED favourite-value edges (docs/research/CHAINLINK_EDGE_HUNT_2026-06-05.md) =====
 # Mechanism: the book systematically UNDERPRICES near-locked favourites (favourite-longshot bias).
@@ -1336,7 +1342,7 @@
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 - id: fav_deepdown
   name: "Fav-value: deep DOWN-favourite 7-8min (verified +$0.66 fresh-OOS CL; buy NO, hold)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-06: KILLED by rule in Edge Hunt v2 (fails official-label gates; lifetime -$153 even on inflated labels).
   type: determinism
   starting_capital_usd: 1000.0
   timeframe: "15m"
@@ -1421,7 +1427,9 @@
 # official-settled CI-lo>0 via nightly scoreboard) before any live talk.
 - id: early_disagree_cl_v1
   name: "Early-disagree CL-gated (atlas v2 cells: tl 450-900s, disagree, ask 0.30-0.40, Chainlink agree+dist>=2bps, hold)"
-  enabled: true
+  # KILLED 2026-07-17: 14-day gate FAILED on official labels — n=782, -$179.66, EV -$0.23/fill
+  # (EV<0 at n>=40 kill rule). Engine pnl claimed +$0.72/fill = oracle inflation. Ledger frozen.
+  enabled: false
   live: false
   type: determinism
   starting_capital_usd: 1000.0
@@ -1456,7 +1464,9 @@
 # scoreboard gate (official-settled CI-lo>0) before any live talk.
 - id: fav_disagree_d5cl_v1
   name: "Fav-disagree d5 + Chainlink-agree gate paper (tl 120-360s, dist>=5bps, ask 0.05-0.90, CL must agree with buy side)"
-  enabled: true
+  # KILLED 2026-07-17: 14-day gate FAILED on official labels — n=314, -$401.45, EV -$1.28/fill,
+  # CI [-2.49,-0.05] (CI-hi<0 kill rule). Engine pnl claimed +$0.47/fill. Ledger frozen.
+  enabled: false
   live: false
   type: determinism
   starting_capital_usd: 1000.0
@@ -1495,6 +1505,44 @@
     filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
     human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 10.0}
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
+
+# ── VOLUME-HARVEST 2026-07-25: the ask band fav_disagree_live discards ────────────────
+# fav_disagree_live above is a strict SUBSET of its paper twin `fav_disagree`: identical rule
+# (disagree, tl 120-360s, dist>=10bps), ONE number different — max_ask 0.45 vs 0.90. On official
+# labels since 06-19 the twin does 8.74 sig/day / +$24.28/day @$10; live gets 2.07 intents/day ->
+# 0.93 fills/day -> ~+$5.3/day. ~78% of the validated signal is thrown away by the cap.
+# THIS strategy takes ONLY the discarded slice: ask 0.46-0.60, n=206, official EV +$1.80/fill
+# CI [+0.49,+3.09], 5.9 sig/day, WR 62%, median intent-time depth $18.55 (test_ledger
+# "VOLUME-HARVEST ROUND", pre-registered 2026-07-25 BEFORE deploy).
+# Why a SEPARATE strategy instead of widening fav_disagree_live to 0.60:
+#   1. the 08-03 size-rung gate must keep reading a clean $10 / 0.05-0.45 book;
+#   2. it is a different payoff shape, not more of the same — below 0.45 you buy the side the book
+#      actively DISfavours (WR ~50%, big payoff); at 0.46-0.60 you buy a side the book weakly
+#      favours but UNDERPRICES (WR 62%, small payoff). Separate books measure separate cohorts.
+# min_ask 0.46 NOT 0.45: determinism_state.py:402 is `min_ask <= fav_ask <= max_ask` — inclusive
+# at BOTH ends — so 0.45 would double-fire with fav_disagree_live on the same slug.
+# $5 (not $10) is the measurement rung: the +$1.80/fill was measured at $10, so expect ~+$0.90/fill
+# and ~+$1.4-1.8/day here. GATE 2026-08-07: n>=25 AND official CI-lo>0 AND fill-rate>=40% =>
+# propose $10 (user sign-off); KILL CI-hi<0 or EV<0 at n>=40. 0.60 is FIXED — no band re-cutting.
+# NOTE: this is also the strategy hype must be armed for on 07-31 — 94% of hype's value is ask>0.45
+# (n=73, +$3.60/fill, CI [+1.81,+5.29]) and only 0.14 sig/day falls in the current live band.
+- id: fav_disagree_hi_live
+  name: "Fav-disagree HI-ASK LIVE ($5/trade real money; tl 120-360s, |dist|>=10bps, buy spot side ask 0.46-0.60, hold; official +$1.80/fill@$10 CI[+0.49,+3.09] n=206; $25/day hard cap, $100 bankroll)"
+  enabled: true
+  live: true    # DEPLOYED 2026-07-25 (user-approved): the untraded half of the ONE edge that survived honest settlement. Measurement rung at $5; gate 2026-08-07 decides $10. Stop rule (same shape as its sibling): official-settled <= -$0.50/fill with CI-hi<0.
+  type: determinism
+  starting_capital_usd: 100.0
+  timeframe: "15m"
+  # $25/day (not the sibling's $50): WR 62% with SMALL payoffs is a flatter-skew profile than the
+  # 0.05-0.45 cohort, so cap truncation costs less here; at $5 x ~2 fills/day realistic deployment
+  # is ~$10/day, so $25 only binds on a wild-volume day. Bankroll $100 is the hard backstop.
+  determinism: {mode: "disagree", t_min_sec: 120, t_max_sec: 360, dist_min_bps: 10.0, min_ask: 0.46, max_ask: 0.60, max_daily_loss_usd: 25.0, daily_loss_mode: "hard_worstcase"}
+  sim_config:
+    entry: {side: "BOTH", entry_price_min: 0.46, entry_price_max: 0.60, drop_magnitude_pct: 0.0, drop_window_sec: 30, min_time_left_sec: 0, proximity_max_pct: 100.0, min_seconds_into_window: 0}
+    exit:  {profit_target_pct: 0.0, stop_loss_pct: null, max_hold_sec: 900, trailing_stop_pct: null}
+    filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
+    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 5.0}
+    fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 # ===== NEW 2026-06-05 — 2099-hypothesis sweep survivor (docs/research/HYPOTHESIS_SWEEP_2026-06-05.md) =====
 # The ONLY genuinely-new deployable edge from a 2099-hypothesis latency-proof sweep (Chainlink-settled,
 # hold-to-resolution, future-block held out, full-L2 cost-stressed, 4 adversarial skeptics).
@@ -1529,7 +1577,7 @@
 # variants (3, 5) A/B the campaign's two best specs (ta_divergence_2585 / 2588).
 - id: tadiv_approx_v1
   name: "TA-divergence approx ret5 (PAPER: buy 30s-move side, tl 60-300s, |move|>=5bps, 10s-vel agrees, ask 0.30-0.55; campaign spec ta_divergence_2588)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-06: KILLED by rule in Edge Hunt v2 (official-label re-score negative; -$587 lifetime).
   live: false
   type: determinism
   starting_capital_usd: 1000.0
@@ -1543,7 +1591,7 @@
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
 - id: tadiv_approx_ret3_v1
   name: "TA-divergence approx ret3 (PAPER: buy 30s-move side, tl 60-300s, |move|>=3bps, 10s-vel agrees, ask 0.30-0.55; campaign spec ta_divergence_2585)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-06: KILLED by rule in Edge Hunt v2 (official-label re-score negative; -$777 lifetime).
   live: false
   type: determinism
   starting_capital_usd: 1000.0
@@ -1626,7 +1674,7 @@
 # coins positive, maxJaccard vs deployed <=0.13.
 - id: psettle_ud_v1
   name: "psettle underdog-value paper (sweep psettle_2246: tl 60-360s, buy non-fav ask 0.50-0.78 when p_settle-ask>=0.15, hold; live-model future +$2.00/fill)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-25: -$316 over 14d on official labels (-$1.43/fill, n=221). Ledger freezes today. CPU headroom for the engine-saturation guard; the 07-06 prune disabled 7 strategies on weaker evidence. Its cl_dist leg was also degraded by the 07-24/25 Chainlink outage.
   live: false
   type: determinism
   starting_capital_usd: 1000.0
@@ -1648,7 +1696,7 @@
 # misses — this paper run prices that haircut.
 - id: oracle_fade_v1
   name: "Oracle-print near-strike fade paper (OP4: tl 60-360s, fav>=0.75 but p_settle(fav)<=0.60, buy cheap side ask 0.05-0.35, hold; live-model future +$5.87/fill)"
-  enabled: true
+  enabled: false  # PRUNED 2026-07-06: KILLED by rule in Edge Hunt v2 (26% WR, paper +$ was settle-oracle artifact; honest re-score negative).
   live: false
   type: determinism
   starting_capital_usd: 1000.0
@@ -1696,6 +1744,32 @@
   sim_config:
     entry: {side: "BOTH", entry_price_min: 0.0, entry_price_max: 0.90, drop_magnitude_pct: 0.0, drop_window_sec: 30, min_time_left_sec: 0, proximity_max_pct: 100.0, min_seconds_into_window: 0}
     exit:  {profit_target_pct: 0.0, stop_loss_pct: null, max_hold_sec: 900, trailing_stop_pct: null}
+    filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
+    human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 10.0}
+    fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}
+
+# ===== EDGE HUNT v3 (2026-07-24, test_ledger "EDGE HUNT v3 VERDICTS"): g2bps-5y twin =====
+# The CONFIRMED cross-horizon survivor xh_5y_m02_g02_b600-900_r1_c90 (+$1.02/$5fill,
+# CI [+0.16,+1.95], p=.019, n=132, seed-robust on the never-mined 07-03..07-23 window).
+# Mirror leg of xb: runs ON the co-terminal 5m market (window_start % 900 == 600) and
+# buys OWN YES when the parent 15m book strictly dominates it — own K5 <= K15 - 2bps
+# makes own YES the SUPERSET event, so own yes_ask + 0.02 <= 15m yes_bid is a strict
+# mispricing. >= $1 notional behind the referenced 15m bid; entry ask in (0.03, 0.90];
+# hold to OWN (5m) resolution. Non-co-terminal 5m windows carry no xb15_* fields and
+# fail closed. Settles on the 5m official label — the label the retest certified.
+# GATE (pre-registered): >= 14 virgin-forward days, official-settled EV/fill CI-lo > 0
+# => live talk (own gate + user sign-off). KILL: CI-hi < 0, or EV < 0 at n >= 40.
+- id: xh5y_g2_v1
+  name: "g2bps-5y cross-book paper twin (buy co-terminal 5m YES on 15m-book dominance; m0.02/g2bps/ref$1/ceil0.90; Edge Hunt v3 survivor)"
+  enabled: true
+  live: false
+  type: determinism
+  starting_capital_usd: 1000.0
+  timeframe: "5m"
+  determinism: {mode: "xb5y", xb_premium: 0.02, xb_gap_min_bps: 2.0, xb_min_ref_usd: 1.0, xb_on_missing: "skip", t_min_sec: 5, t_max_sec: 300, min_ask: 0.03, max_ask: 0.90, max_daily_loss_usd: 50.0, daily_loss_mode: "hard_worstcase"}
+  sim_config:
+    entry: {side: "BOTH", entry_price_min: 0.03, entry_price_max: 0.90, drop_magnitude_pct: 0.0, drop_window_sec: 30, min_time_left_sec: 0, proximity_max_pct: 100.0, min_seconds_into_window: 0}
+    exit:  {profit_target_pct: 0.0, stop_loss_pct: null, max_hold_sec: 300, trailing_stop_pct: null}
     filter: {min_book_depth_usd: 0.0, max_spread: 1.0, book_imbalance_min: null, vol_regime: "ALL", time_of_day: "ALL", multi_tier_entry: 1, correlated_signal_filter: false}
     human: {reaction_delay_min_sec: 0.0, reaction_delay_max_sec: 0.0, signal_skip_prob: 0.0, daily_trade_cap: null, post_loss_cooldown_sec: 0, concurrent_position_cap: 50, fixed_bet_usd: 10.0}
     fill:  {fee_rate: 0.07, reject_prob: 0.0, use_next_tick_for_fill: true, realistic_fill_model: true}

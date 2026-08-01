@@ -89,14 +89,14 @@ Look for: process alive, last_tick heartbeat <10s, active_markets > 0.
 
 ✓ Process running (pid=X)
 ✓ Heartbeat Xs ago, N active markets
-✓ 4 strategies enabled
+✓ N strategies enabled  (count is dynamic — all `enabled: true` entries in strategies.yaml; e.g. det_d12_wide_v1 + fav_* + det_* families)
 
 **Preflight:**
 - KILL sentinel: ✓ absent
 - polymarket-arb path: ✓ reachable
 - data_v2 symlink: ✓ valid
 - Gamma API: ✓ 200 OK
-- strategies.yaml: ✓ 4 strategies parsed
+- strategies.yaml: ✓ N strategies parsed (dynamic; report the actual count from load_strategies)
 
 **Now collecting:** tick data → data/live/, paper trades → data/jsonl/<sid>/
 

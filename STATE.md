@@ -4,6 +4,253 @@
 
 ---
 
+## 2026-08-01 - GATE-WEEK PREP: repo versioned, alarm actually scheduled, score_gates tool shipped, calendar staged
+
+Five dated gates land 08-03..08-07. This session (user-approved plan) made gate week
+mechanical and closed the operational holes; NO gated forward slice was scored.
+
+**SHIPPED:**
+1. **Git**: a month of drift committed (HEAD was 07-03). The entire live-money path
+   (`scripts/live_executor.py`, `src/mean_reversion_live/live/`) had NEVER been under git,
+   the running system was the only copy. Now versioned; secrets scan clean; `.env`/`data/`
+   stay ignored.
+2. **Chainlink alarm scheduled**: `hourly_monitor.sh` (the rows_ok=0 detector written after
+   the 07-24 32h silent outage) was in NO crontab and had never executed once. Now
+   `37 * * * *`. Two cron-env verification runs; fixed on the way: cron PATH lacked uv, and
+   the monitor's claim step was missing the relayer `--with` deps so its preflight failed
+   silently (the supervised claim_loop was never affected).
+3. **`research/analysis/score_gates.py`**: the registered gate metric as a committed,
+   tested tool (see ledger 2026-08-01 for validation + the 07-26 snapshot caveat). Gate
+   day is now one command + a decision.
+4. **det_lwd_live registered-method read**: lifetime n=412 +$0.034/fill CI [-0.19,+0.25]
+   (break-even canary, as designed); last-14d n=56 **-$0.522/fill** CI [-1.10,**+0.01**];
+   since-$2 n=25 -$0.288 CI [-0.66,+0.07]. Stop rule (<= -$0.50 AND CI-hi<0) NOT
+   mechanically tripped, by $0.01 of CI-hi. **Decision with the user**: keep the $2 canary
+   vs stop.
+5. **Ledger dispositions**: bnb capacity gets its missing date (08-14, with doge, one
+   look); R3 CLOSED without eval (9/25 misses by 08-07 is unreachable; armed 4b is the
+   07-25-amendment substitute). Watch-item closed: GLOBAL_MAX_CONCURRENT=4 fired ZERO
+   times in the whole live_exec.log.
+6. **EDGE HUNT v4 pre-registered and sealed** (`docs/research/EDGE_HUNT_V4_PREREG_2026-08.md`):
+   window 07-24..08-14, reveal 08-15, atlas persistence + new-cell scan + the two frozen
+   early-timing disagree cells (that thread's last look). Zero data contact until reveal.
+
+**GATE CALENDAR** (each = one `score_gates` command + the registered thresholds; windows
+below are the registered ones, do NOT run early):
+
+| date | gate | command | decide |
+|---|---|---|---|
+| 08-03 | fav_disagree_live $15 rung | `live --sid fav_disagree_live --since 2026-07-03T07:40 --until 2026-08-03` | CI-lo>0 on BOTH $/fill and per-$ => propose $15; spans 0 => extend at $10 (2nd extension); <=-$0.50 CI-hi<0 => stop |
+| 08-06 | R1 xb live promotion | (a) `paper --sids xb_5m15m_causal_v1 --since 2026-07-24 --until 2026-08-06`; (b) live-2 guarded on recorded decisions (07-26 method) >= +$0.50/fill | both pass => propose live @$10 own book; CI-hi<0 => KILL; else extend 2wk once |
+| 08-07 | fav_disagree_hi_live $10 rung | `live --sid fav_disagree_hi_live --since 2026-07-25 --until 2026-08-07` | n>=25 AND CI-lo>0 AND fill-rate>=40% => propose $10; CI-hi<0 or EV<0 @n>=40 => KILL; n<25 => extend once to 08-21 |
+| 08-07 | hype fill-rate calibration | hype fills/attempts from fills.jsonl since 07-26 | <40% => leg-2 guarded method recalibration before it arms anything else |
+| 08-07 | R2 widening cell | `paper --sids fav_disagree_d5 --minus-sids fav_disagree --ask-band 0.30,0.45 --since 2026-07-24 --until 2026-08-07` | CI-lo>0 AND n>=40 => propose dist_min_bps 10->5; CI-hi<0 or EV<0 @n>=40 => KILL |
+| 08-07 | R4 hour gate (ONE look) | `paper --sids fav_disagree --hours 16,17,18,19 --since 2026-07-24 --until 2026-08-07` | EV<0 AND CI-hi<0 => propose skip-window; anything else => DROP |
+| 08-07 | xh5y_g2_v1 14-day twin | `paper --sids xh5y_g2_v1 --since 2026-07-24 --until 2026-08-07` | CI-lo>0 => live talk (sign-off); CI-hi<0 or EV<0 @n>=40 => KILL |
+| 08-14 | doge + bnb capacity (one look) | `paper --sids fav_disagree,fav_disagree_live --symbol doge --since 2026-07-17T17:00 --until 2026-08-14` (repeat --symbol bnb) | n>=30 CI-lo>0 + guarded survive => propose; still inconclusive => DROP |
+| 08-15 | EDGE HUNT v4 reveal | per the sealed prereg | one look |
+
+**SYSTEM** (verified this session): engine PID 75250 up since 07-25, heartbeat ~2s, all 7
+coins ticking; executor PID 55492 up since 07-26, pending=0 on all 6 books; nightly honest
+green 08-01 03:16Z; Chainlink feed live (oracle_age 13-31s). Still open: executor restarts
+silently drop in-flight intents (avoid restarts in gate week; pending=0 makes a needed one
+safe), and `ws_recv_ended` background rate unchanged.
+
+---
+
+## 2026-07-26 — hype ARMED for fav_disagree_hi_live: the allowlist, not the edge, was the drought
+
+**THE SYMPTOM.** 33h with zero live fills. **20 of 20 intents since the last fill were hype or doge**
+— every one skipped by the executor allowlist. Not a signal outage: the paper twins of the live
+strategies traded 9-20x in the same window, 100% on unarmed coins. Armed-coin share of live-strategy
+signal has been collapsing: 07-16 100% -> 07-20/21 40-50% -> 07-23 28% -> 07-25 28% -> 07-26 **0%**
+(10d aggregate 41%, last 4d 30%). `fav_disagree_hi_live`, deployed 07-25 to harvest exactly this,
+was heading for its 08-07 n>=25 gate with **n=0**.
+
+**RESOLVED THE 07-31 GATE 5 DAYS EARLY** (criteria fixed 07-17; hype crossed n>=30 on its own):
+1. **Capacity gate:** hype n=88, EV **+$3.61/fill**, CI [+1.56,+5.56], WR 76% => PASS. doge n=22,
+   CI [-1.49,+10.04] => inconclusive. btc/bnb "KILL" is n=4 noise, ignored.
+2. **live-2 guarded fill model** (the registered pre-condition). `rejudge_live_model` can't run it —
+   joined_15m covers btc/eth/sol/xrp only — but both inputs exist for hype, so it ran on them
+   directly: recorded decisions (twins' official in-band entries) x real `data/live_l2/hype_*` 10-level
+   ladders x `simulate_taker_entry(mode="guarded")` @$5. hype **36/61 filled (59%), EV +$2.03/fill,
+   CI [+0.97,+3.04], WR 78% => SURVIVES**. doge 5/11, -$1.29 => FAILS. 59% on a $15 median book beats
+   the live 4-coin funnel. Expect ~4.3 fills/day ~= **+$8.7/day** vs ~$0 today.
+   Caveat kept in the open: the model draws the zero-fill hazard RANDOMLY while live misses are
+   adversely selected, so +$2.03 is an OPTIMISTIC bound (it scales to +$4.05@$10, above the paper
+   +$3.67 — that inversion IS the tell).
+3. **User sign-off** 2026-07-26.
+
+**SHIPPED:** `.env EXEC_SYMBOLS_EXTRA=fav_disagree_hi_live:hype`, executor bounced, verified
+`symbols_extra={'fav_disagree_hi_live': ['hype']}` with all 5 books preserved. hype ONLY, that
+strategy ONLY — `det_lwd_live` deliberately gets no hype (70 of its last 75 intents were hype, at
+-$0.128/fill official, now $2/trade). doge stays paper-only, re-evaluates 08-14.
+
+**WATCH 08-07:** realised hype fill-rate vs the 59% predicted. A miss below 40% means the guarded
+model over-credits thin books and leg-2's method needs re-calibration before it arms anything else.
+
+---
+
+## 2026-07-25 — VOLUME HARVEST: we were discarding 78% of our own validated signal; +1 live book, Chainlink outage fixed
+
+User asked to "find more ways to be profitable". Answer came from measurement, not discovery:
+**the binding constraint is COVERAGE of the one surviving edge, not a missing edge.**
+
+**THE FINDING.** `fav_disagree_live` is a strict SUBSET of its own paper twin. `fav_disagree` is the
+identical rule (mode disagree, tl 120-360s, dist>=10bps) differing in exactly ONE number:
+max_ask **0.90 vs 0.45**. On official labels since 06-19: twin **8.74 sig/day / +$24.28/day @$10**;
+live **2.07 intents/day -> 0.93 fills/day -> ~+$5.3/day**. The discarded ask 0.46-0.60 cohort scores
+**n=206, +$1.80/fill, CI [+0.49,+3.09], 5.9 sig/day, WR 62%**, median intent-time depth $18.55.
+The 07-03 axis-3 ask-band look never saw it — it only examined *inside* the live band (<=0.45).
+Economically it is a different payoff shape, not more of the same: below 0.45 you buy the side the
+book actively DISfavours (WR ~50%, big payoff); at 0.46-0.60 you buy a side the book weakly favours
+but UNDERPRICES (WR 62%, small payoff). Hence a separate book, not a widening.
+
+**CORRECTION TO THE 07-31 CAPACITY GATE (would have deployed nothing):** 94% of hype's value sits at
+ask>0.45 (n=73, **+$3.60/fill, CI [+1.81,+5.29]**, WR 78%, 2.09/day); in-band hype is 0.14 sig/day.
+And **70 of the last 75 hype intents came from det_lwd_live**, not the disagree family — so a global
+`EXEC_SYMBOLS += hype` would have put the losing probe on the new coin at 14x the volume of the
+right one. Hype must be armed PER-STRATEGY, for `fav_disagree_hi_live`, or it is worth ~nothing.
+
+**SHIPPED (all pre-registered in test_ledger.md "VOLUME-HARVEST ROUND" BEFORE deploy; suite 579
+passed / 5 skipped / 0 failed, sweep_v2 excluded for the pre-existing missing lightgbm):**
+1. **`fav_disagree_hi_live` LIVE** — disagree, tl 120-360s, dist>=10, **ask 0.46-0.60**, $5/trade,
+   own $100 bankroll + $25/day hard_worstcase, own executor book. `fav_disagree_live` UNTOUCHED at
+   $10/0.05-0.45 so the 08-03 size-rung gate keeps reading a clean book. min_ask **0.46** not 0.45:
+   `determinism_state.py:402` is inclusive at BOTH ends, so 0.45 would double-fire on one slug
+   (asserted in the roster check). GATE 2026-08-07: n>=25 AND official CI-lo>0 AND fill-rate>=40%
+   => propose $10; KILL CI-hi<0 or EV<0 at n>=40. At $5 expect ~+$1.4-1.8/day — this rung buys the
+   RIGHT to $10, it is not the payoff.
+2. **det_lwd_live $5 -> $2.** -$30.40 over its last 12 traded days, +$0.078/fill lifetime (433
+   fills), official clean-era EV -$0.128. Stop rule NOT tripped, so a SIZE decision not a kill: it
+   stays the always-on execution canary (88% of live intents) at ~40% of the bleed.
+3. **Pruned** `psettle_ud_v1` (-$316/14d official) and `det_disagree_v1` (-$119/14d). 17 enabled.
+4. **Executor bug 4a — round-2 re-quote.** `:582-586` bumps cur_ask to the real touch before round 1
+   (an IOC below the touch is an API-400, not a fill, and clob_trade breaks the ladder on the error
+   WITHOUT advancing a tick) — but the loop never refreshed it, so a zero-fill round re-fired the
+   same known-bad price 4s later. **36 of 115 ladder rounds died this way.** Now re-runs `_preflight`
+   and re-applies the bump; aborts if the book collapsed between rounds (knife cohort).
+5. **Executor 4b — bounded dry-retry, ARMED at `EXEC_DRY_RETRY_N=3`.** All 17 dry skips were
+   `best_ask > ceiling` (the price moved above max_ask — NOT a thin book), and the single 3s
+   re-check already rescued 7. Still taker-only, bounded by time_left. Default 1 = legacy.
+   This is the cheap version of registered R3 (30s resting limit); R3 still evaluates 08-07, but if
+   it passes, ship 4b instead — a resting maker bled -$1.99/tr (module header).
+6. **Per-strategy symbol allowlist** `EXEC_SYMBOLS_EXTRA="sid:sym,..."` — **SHIPPED UNARMED**
+   (empty = byte-identical). Arms hype for `fav_disagree_hi_live` only after the 07-31 gate + the
+   live-2 fill check + user sign-off. 7 new executor tests; 40/40 in that module.
+
+**CHAINLINK OUTAGE FIXED (32h, 100% dead, silent).** 9,207 `chainlink_fetch_failed`, ZERO successes,
+all 6 coins, from 2026-07-24 09:02 UTC. Cause: the built-in `DEFAULT_POLYGON_RPC` (Tenderly public
+gateway) went dead, and `.env` set `POLYGON_RPC` (the claimer/relayer name) but not
+`POLYGON_RPC_URL` (the collector name, `run_combined.py:88`), so the override never applied. Do NOT
+"tidy" one name away — `claimer.py`/`relayer.py` genuinely read `POLYGON_RPC` (real money); both are
+now set and commented. Default repointed to publicnode (verified serving `eth_call` on the BTC/USD
+feed). **Alarm added** (`hourly_monitor.sh` step 5) on the collector's own `chainlink_status
+rows_ok=0` — validated against this incident (it fires on the broken state, silent on the fixed one).
+NO live-money impact: neither live strategy reads `cl_dist_bps`. **VOID over the gap:**
+`det_d12_dual_v1` (oracle_gate agree, fail-CLOSED => fired ZERO = void, not neutral), psettle's cl
+leg, every `cl_*` tick field. Official labels come from Gamma, so all open gates still score.
+
+**DEPLOY VERIFIED (cap-safe: no UTC-day losses booked, nothing pending/open at restart).** Engine
+15:54 UTC, 17 strategies, heartbeat <5s, queue 0, `skipped_book=0`. Chainlink `rows_ok=6 rows_err=0`
+on cycle 1. Executor restarted twice (second to arm the retry), **all 5 books restored to the cent**
+both times (realized, deployed, done_slugs, per-day cap state), single instance, startup line shows
+`dry_retry_n=3`, `symbols_extra={}`. `fav_disagree_hi_live` fired within the hour and correctly:
+doge, ask **0.59** (in band), dist 10.52, tl 174, $5, max_ask 0.6 — paper win +$3.33.
+
+**CAVEATS / WATCH.** (a) That first intent landed during the executor restart window and was
+silently dropped — the executor starts reading intents at EOF (`:803`), so restarts lose in-flight
+intents with no skip log. Pre-existing; it was doge (paper-only) so nothing was lost. (b)
+`ws_recv_ended` runs 1-6/hour as a pre-existing background rate (the 95 spike at 15Z is boot
+subscription churn); books are fresh (`skipped_book=0`) — noted, not chased. (c)
+`GLOBAL_MAX_CONCURRENT=4` has produced 0 skips; a third live book could start binding it — check
+`intent_skipped` for the global-concurrency reason in a week, do NOT pre-emptively raise it.
+(d) Realistic stack: ~$5.3/day -> ~$8/day now; the $15-25/day target still depends on 08-03 (rung),
+08-06 (xb), 08-07 (xh5y + R2/R3/R4 + this new gate).
+
+---
+
+## 2026-07-24 — EDGE HUNT v3: freeze lifted, g2bps-5y family CONFIRMED on fresh data
+
+Pre-registered (test_ledger "EDGE HUNT v3") BEFORE any reveal, then scored the two threads
+on the never-mined 2026-07-03..07-23 window (frames rebuilt through 07-24; the monolithic
+rebuild kept getting externally killed — built incrementally via research/build_5m_increment.py;
+xbook + slim rebuilt; official labels current).
+
+**V3a — g2bps-5y retest: 2/3 SURVIVE → cross-horizon door RE-OPENS.** The v2 "suggestive
+but failed FDR" specs, frozen by name, now pass every gate on fresh forward data:
+xh_5y_m02_g02_b600-900_r1_c90 (n=132, +$1.02/$5fill, CI [+0.16,+1.95], p=.019) and
+_r10_c97 (n=102, +$0.93, CI [+0.09,+1.83]). ~6.6 signals/day, Jaccard 0.15 vs xb twin
+(mostly NEW volume). Economic content: in the last 5 min of a 15m window, the co-terminal
+5m market's cheap YES trades >=2bps-gap rich vs the 15m book => buy the 5M instrument.
+**Twin DEPLOYED same-day** (mode="xb5y" + xb15_* collector fields, 14 tests, engine restarted 08:47 UTC as xh5y_g2_v1; gate eval 2026-08-07). Original blocker was: PART B = attach
+co-terminal 15m book to 5m ticks (or let xb emit on the 5m slug), then standard 14-day
+official-settled twin gate. NO live talk before that.
+
+**V3b — Atlas v3: 0 positive candidates** (sealed future never opened for positives);
+41 fade cells persist. The v2 disagree cells keep sign but thin (dev/hold descriptive only).
+No new-cell claims; live fill gate stays the arbiter for the disagree family.
+
+Standing calendar: 07-31 hype capacity gate (early read PASSING: n=49 +$3.88/fill official,
+CI-lo +1.68) · 08-03 fav_disagree $15 rung (n=27 +$4.01/fill, CI-lo -0.47, one win from
+flipping) · 08-06 xb promotion gate (R1) · 08-07 R2 widening / R3 exec-rescue / R4 hour gate.
+Live untouched all session: det_lwd_live + fav_disagree_live only, account ~$700.
+
+---
+
+## 2026-07-06 — Forward-validation posture: roster pruned 26→19, fav_disagree_live success gate pre-registered, macro collector revived
+
+Status check + housekeeping session (user-approved plan: "freeze research, run the fav_disagree
+forward test cleanly, decide 07-20 with a gate written down today").
+
+**Live health (16:19 UTC):** engine 3d6h uptime, all green. Ground truth (data-api) **+$62.34
+realized (202W/42L)**, account fully liquid $609.92 / $0 open exposure. det_lwd_live +$58.38
+(88% WR, execution probe); fav_disagree_live +$4.35 today at its new $10 sizing, stop rule not
+tripped. The status skill's Δ(book−truth)=−$152.83 UNDER-COUNT flag was a **false alarm**:
+backfill dry-run = 0 classifiable / +$0 bookable — the gap is 3 weeks of strategy-roster churn
+(killed strategies' history), NOT missed settlements. Post-churn, trust the account balance +
+ground-truth line, not the Δ flag. det_d12_dual_live demotion confirmed already done (06-18).
+
+**ROSTER PRUNE (strategies.yaml, engine restarted ~16:50 UTC, wrapper pid 58091):** disabled the
+7 killed-by-rule paper strategies — det_sqp_v1/_capped/v2, fav_deepdown, tadiv_approx_v1/_ret3,
+oracle_fade_v1 (verdicts final on official labels; paper ledgers freeze 2026-07-06). 26→19
+enabled; live flags unchanged (det_lwd_live + fav_disagree_live only). Cuts ~500 trades/day of
+engine load (saturation guard). Restart was cap-safe (no UTC-day losses booked at restart time).
+
+**PRE-REGISTERED (test_ledger.md "fav_disagree_live FORWARD-VALIDATION GATE"):** evaluate
+2026-07-20 on official-settled fills since re-arm (07-03): CI-lo>0 → propose $15 rung (needs
+fill-rate hold + user sign-off); CI spans 0 → extend at $10 to 08-03; stop rule unchanged.
+RESEARCH FREEZE re-affirmed: no new discovery sweeps before 2026-07-24 (3wk post-registration
+forward data). Open threads: the 3 deployed twins (fav_disagree_d5cl_v1, early_disagree_cl_v1,
+xb_5m15m_causal_v1) + g2bps-5y note. OPEN DEFECT worth closing before any size-up: the executor
+ladder's max_ask overpay (18% of det_d12_dual_live fills cleared above cap — audit lives with
+the executor, affects fav_disagree_live at $15+ too).
+
+**macro_collector REVIVED** (down since 06-19 00:30 UTC — 2.5wk gap in data/live_macro/):
+relaunched via respawn_generic.sh (sentinel data/MACRO_KILL, pid 58716, healthy 4-feed polls).
+
+**LADDER max_ask AUDIT (same day, closes the open defect): the "18% overpay" was a FALSE
+ALARM — the real defect was measurement, and it's fixed.** (1) det_d12_dual_live's deployed
+config was the ADAPTIVE cap (0.78→0.85 @ |cl_dist|≥20) from day one; fill.max_ask ==
+intent.max_ask on all 132 fills and none exceeded its own intent cap — the 06-15 "breach"
+memory compared against flat 0.78. Overpay did NOT cause dual_live's bleed. (2) The genuine
+invariant violations: 4/593 fills wallet-wide with avg_price > own cap (+0.2¢..+1.7¢, $0.32
+lifetime, one on fav_disagree_live) — ALL matched to `clob_fill_via_balance_fallback` log
+events: order API unreadable → usdc_paid = shared-wallet pUSD delta (10s window) → polluted by
+concurrent movement/API lag. Physically impossible as fills (IOC can't clear above limit:
+11sh @ ≤0.45 ≤ $4.95, recorded $5.14). Ladder/ceiling code verified correct (live_executor.py
+ceiling + fill_or_chase price guard). FIX: `clamp_buy_fallback()` in clob_trade.py bounds
+fallback cost at shares×limit, logs `clamped=true`; TDD'd with the real incident numbers
+(tests/test_clob_fill_detection.py, 8/8 in the SDK env); full suite 222 passed (also refreshed
+two stale live-set pin-tests in test_psettle_mode/test_xb_mode that had been red since the
+06-18 kill). **DEPLOYED: executor restarted 17:48 UTC (user-approved) — SIGTERM'd cleanly
+(pending=0, nothing in-flight), relaunched via the hourly_monitor.sh command; single instance
+verified (one executor_started, no duplicate pids); all 5 books restored to the cent incl.
+today_pnl/cap state. The clamp is live. fav_disagree_live size-up is UNBLOCKED from the
+overpay concern.**
+
+---
+
 ## 2026-07-03 — EDGE HUNT v2: honest apparatus completed; fav_disagree passes ALL gates → RE-ARMED live (user-approved)
 
 Theory-first campaign (pre-registered in test_ledger.md "HONEST EDGE HUNT v2"; plan
@@ -1522,3 +1769,65 @@ paper twin; after a few days decide scale/stop on clean Chainlink-settled live+p
 **Live probe:** first real fills — 1 sol UP filled ($5.02; per-share accounting suspect, $ correct), 2 benign FAK no-fills. Deployed $5.02/$100. Cap restart-safety verified (det_lwd_live hard_worstcase + replay; $100 bankroll cap restart-safe).
 
 **Remaining (lower priority — new edges dominate):** sqp correlation-netting (macro-tail loss-prevention), E4 depth-aware sizing; crosscoin engine plumbing. Add a unit test for the new gates.
+
+---
+
+## 2026-07-09 — Housekeeping: 14.6GB disk reclaim + signals rotation shipped; twin gates mid-flight (early_disagree_cl leading)
+
+Status checks (10:23 + 20:10 UTC) all green — engine 3d+ uptime, all 4 daemons, 0 respawns.
+**Live ground truth accelerating: +$62 (07-06) → +$136 → +$148.35 (202W/36L), account $669.93
+fully liquid.** fav_disagree_live's best real day (+$35.19, incl. 3 cheap-favourite jackpots
++$12-25 each), balance −$26.15→−$13.31. Gate mid-flight (n=14 since re-arm): mean +$3.80/fill,
+CI [−2.21,+9.82] — **dead on the bubble**; at 2 fills/day, CI-lo>0 on 07-20 needs mean ≥~$3.9.
+Δ(book−truth) −$174 re-confirmed 0-bookable (roster-churn artifact; dry-run this morning).
+
+**DISK RECLAIM (user go): freed 14.6GB** (machine 14.5→29GB free). Gzipped the 8 frozen/dead
+strategies' signals.jsonl (det_sqp trio 11.4GB, tadiv ×2, oracle_fade, fav_deepdown,
+det_d12_dual_live) — engine holds no handles on disabled strategies, safe while running.
+trades.jsonl/portfolio_snapshots left plain (durable ledgers, span math reads them).
+**ROTATION SHIPPED (scripts/start_all.sh):** at next clean start, any signals.jsonl >200MB is
+mv'd to signals.YYYYMMDD.jsonl + gzipped in background. Engine keeps a persistent append handle
+(persistence.py JsonlAppender) so rotation ONLY happens in start_all after the running-guard —
+do NOT rotate externally while the engine is up. Machine-wide burn is mostly NOT the bot
+(~/Library/Developer 33GB Xcode, Caches 15GB, Docker build cache 9.3GB reclaimable, ~/dev/spca
+active) — bot writes ~0.3GB/day post-rotation.
+
+**PROMOTION QUESTION (user asked): recommendation NO promotion before the registered dates.**
+Mid-flight twin standings vs their 14-day gates (PAPER-settled = inflated caveat; official
+labels + fills_live are the real 07-17 test): early_disagree_cl_v1 **+$0.80/fill CI [+0.12,+1.48]
+n=384 — CI-lo>0 at halfway, the leading candidate**; fav_disagree_d5cl_v1 +$0.35 [−1.31,+2.00]
+spans 0; xb_5m15m_causal +$0.70 [−0.97,+2.37] spans 0. psettle_ud_v1/det_disagree_v1 look great
+on paper labels but are NOT registered candidates and never passed official-label gates (the
+06-19 reckoning: paper stars deflate ~4:1). Calendar: **07-17 twin gates (official-label
+re-settle + fills_live guarded) → 07-20 fav_disagree_live size gate → 07-24 freeze lifts.**
+Next live promotion, if any, = early_disagree_cl_v1 passing 07-17 on official labels, own $100
+bankroll + $25/day cap, user sign-off.
+
+---
+
+## 2026-07-17 — Deep-dive session: twin gates scored (2 kills), capacity expansion to 7 coins
+
+**The scheduled check (07-03 twins' 14-day gates) — both FAILED on official labels:**
+- `fav_disagree_d5cl_v1` KILLED: n=314, **-$401.45**, EV -$1.28/fill, CI [-2.49,-0.05]. The
+  CL-agree-gate improvement is dead forward (engine paper claimed +$0.47 — oracle inflation).
+- `early_disagree_cl_v1` KILLED: n=782, **-$179.66**, EV -$0.23/fill (EV<0 n>=40 rule). The
+  atlas early-timing edge did not survive. Both pruned (roster 19→17), engine restarted
+  ~16:41 UTC (wrapper 6640). Their 200MB signal logs auto-rotated.
+- `xb_5m15m_causal_v1` inconclusive (+$0.73, CI spans 0) — data collection until post-07-24.
+
+**Honest state of the world:** fav_disagree family is the ONLY validated edge. Live +$3.15/fill
+(n=23) vs paper twin +$2.02 same window — tracking. Live capture verified PERFECT (41/41 twin
+decisions intended; low n IS the edge frequency ~2.9/day). det_lwd_live: 400 real fills,
+EV +$0.135 CI spans 0 = break-even probe as designed. 07-20 gate: NEUTRAL => extend $10 to 08-03.
+
+**CAPACITY EXPANSION deployed (user-approved): SYMBOLS += bnb,doge,hype — paper only.**
+The one growth lever that scales the validated edge without touching it (~+75% signal volume).
+Wiring: coinbase.py + spot_ws_collector.py maps, .env SYMBOLS, Chainlink feeds bnb/doge
+(verified vs spot; hype has no Polygon feed — fail-closed OK). REAL MONEY GUARDED:
+live_executor.py gained EXEC_SYMBOLS allowlist (default btc,eth,sol,xrp) — new coins CANNOT
+reach the wallet until their pre-registered gate passes (test_ledger "CAPACITY EXPANSION
+GATE", eval 2026-07-31) + user sign-off. Executor bounced ~16:41 UTC (also deployed the
+pending clamp_buy_fallback from 07-06). Post-restart: 28 markets (16+12), hb 4s, queue 0.
+
+**Next:** 07-20 fav_disagree gate (mechanical: extend). 07-24 research freeze lifts (g2bps-5y
+re-registration candidate). 07-31 new-coin gate. Watch queue/CPU under 28 markets for a day.
