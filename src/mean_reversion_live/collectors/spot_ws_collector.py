@@ -35,6 +35,9 @@ _SYMBOL_TO_PRODUCT = {
     "eth": "ETH-USD",
     "sol": "SOL-USD",
     "xrp": "XRP-USD",
+    "bnb": "BNB-USD",
+    "doge": "DOGE-USD",
+    "hype": "HYPE-USD",
 }
 _PRODUCT_TO_SYMBOL = {v: k for k, v in _SYMBOL_TO_PRODUCT.items()}
 

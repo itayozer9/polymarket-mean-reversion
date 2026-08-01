@@ -54,6 +54,11 @@ class StrategyHandle:
     # mean-reversion PerMarketState. Additive: defaults None => unchanged path.
     det_params: Optional[DetParams] = None
     sq_params: Optional[StaleQuoteParams] = None
+    # When True, this strategy ALSO emits immediate-flush entry intents to
+    # data/live/intents.jsonl for the standalone live executor (real orders).
+    # Additive: paper accounting is unchanged; the live executor is a separate
+    # process. Default False => no behaviour change.
+    live: bool = False
     portfolio: Portfolio = None  # type: ignore
     rng: np.random.Generator = None  # type: ignore
     states: Dict[str, PerMarketState] = field(default_factory=dict)
@@ -61,6 +66,7 @@ class StrategyHandle:
     signal_log: Optional[JsonlAppender] = None
     snapshot_log: Optional[JsonlAppender] = None
     trade_detail_log: Optional[JsonlAppender] = None
+    live_intent_log: Optional[JsonlAppender] = None
     # Macro-snapshot provider, injected by the paper engine. Returns a dict.
     _macro_snapshot: Optional[Callable[[int], dict]] = None
     # Per-slug throttle: ts of last logged event for each slug (in seconds).
@@ -72,11 +78,14 @@ class StrategyHandle:
         # One daily-loss guard shared across all per-window states of a det /
         # stale-quote strategy (None for mean-reversion strategies).
         _cap = None
+        _mode = "soft_settled"
         if self.det_params is not None:
             _cap = self.det_params.max_daily_loss_usd
+            _mode = getattr(self.det_params, "daily_loss_mode", "soft_settled")
         elif self.sq_params is not None:
             _cap = self.sq_params.max_daily_loss_usd
-        self._det_guard = (DailyLossGuard(_cap)
+            _mode = getattr(self.sq_params, "daily_loss_mode", "soft_settled")
+        self._det_guard = (DailyLossGuard(_cap, mode=_mode)
                            if (self.det_params or self.sq_params) is not None else None)
         self._setup_io()
         self._replay_existing_trades()
@@ -118,6 +127,11 @@ class StrategyHandle:
                     # (trades_today bucketed by UTC date; open_positions nets to 0).
                     self.portfolio.on_entry(trade.entry_ts_ms)
                     self.portfolio.on_exit(trade)
+                    if self._det_guard is not None:
+                        # hard modes rebuild today's settled PnL across restarts;
+                        # soft mode no-ops (preserves legacy amnesia). Keyed by the
+                        # settle ts so it lands in the correct UTC-day bucket.
+                        self._det_guard.replay_settled(trade.exit_ts_ms, trade.pnl)
                     n += 1
         except Exception as e:
             log.warning("trade_replay_failed", strategy=self.id, err=str(e), n_replayed=n)
@@ -148,6 +162,12 @@ class StrategyHandle:
         self.trade_detail_log = (
             JsonlAppender(sd / "trades_detailed.jsonl", fsync_every_n=1)
             if (self.det_params is not None or self.sq_params is not None) else None)
+        # Live executor bridge: immediate-flush (fsync every record) so the
+        # standalone order placer sees a "fired" intent with minimal latency.
+        if self.live:
+            live_dir = self.data_dir / "live"
+            live_dir.mkdir(parents=True, exist_ok=True)
+            self.live_intent_log = JsonlAppender(live_dir / "intents.jsonl", fsync_every_n=1)
 
     @property
     def portfolio_path(self) -> Path:
@@ -210,6 +230,36 @@ class StrategyHandle:
             if decision == "flat":
                 self._last_logged_sec_per_slug[slug] = sec
                 return
+
+        # Live executor bridge: emit an immediate-flush ENTRY INTENT on "fired"
+        # (fired is never throttled) so the standalone order placer can act fast.
+        if self.live and decision == "fired" and self.live_intent_log is not None:
+            feat = event.get("features") or {}
+            # Per-strategy live caps travel WITH the intent so the standalone executor
+            # isolates each strategy's bankroll + daily-loss cap (strategies.yaml is the
+            # single source of truth). bankroll = the strategy's starting capital; the
+            # daily cap comes from whichever params object this strategy uses.
+            _params = self.det_params if self.det_params is not None else self.sq_params
+            _daily_cap = getattr(_params, "max_daily_loss_usd", None) if _params is not None else None
+            try:
+                self.live_intent_log.append({
+                    "ts_ms": ts_ms, "strategy_id": self.id, "slug": slug,
+                    "symbol": slug.split("-", 1)[0],
+                    "side": event.get("side_signal"),
+                    "entry_ask": feat.get("fav_ask"),
+                    "time_left": feat.get("time_left"),
+                    "bet_usd": float(self.cfg.human.fixed_bet_usd),
+                    "bankroll_usd": float(self.starting_capital_usd),
+                    "max_daily_loss_usd": float(_daily_cap) if _daily_cap is not None else 25.0,
+                    # The EFFECTIVE price ceiling for THIS entry — the executor's laddered fill chases
+                    # only within [entry_ask, max_ask] and never overpays above it. With a dynamic
+                    # ceiling the engine raises it on deep Chainlink locks, so prefer the per-trade
+                    # eff_max_ask from the signal; fall back to the static param.
+                    "max_ask": float(feat.get("eff_max_ask",
+                                     getattr(_params, "max_ask", 0.85) if _params is not None else 0.85)),
+                })
+            except Exception as e:  # pragma: no cover
+                log.warning("live_intent_append_failed", err=str(e), strategy=self.id)
 
         macro = {}
         if self._macro_snapshot is not None:
@@ -304,6 +354,7 @@ class StrategyHandle:
         })
 
     def close(self) -> None:
-        for log_ in (self.trade_log, self.signal_log, self.snapshot_log, self.trade_detail_log):
+        for log_ in (self.trade_log, self.signal_log, self.snapshot_log,
+                     self.trade_detail_log, self.live_intent_log):
             if log_ is not None:
                 log_.close()

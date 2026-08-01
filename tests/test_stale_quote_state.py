@@ -87,6 +87,29 @@ def test_enters_on_jump_and_mispricing_then_settles():
         pytest.skip("constructed series did not cross the jump+mispricing gate")
 
 
+def test_max_dist_gate_blocks_far_from_strike():
+    """v2 gate: a clean firing series (low-variance history + fine 1s ramp so
+    vel_10s is high but rvol stays low) fires without the cap and is blocked with
+    a cap below the entry distance — proving the gate is what blocks."""
+    def run(cap):
+        s, pf, rng = (StaleQuoteState("btc-updown-15m-1", _params(max_dist_bps=cap), 900),
+                      _pf(), np.random.default_rng(0))
+        # quiet history: tiny zigzag ~0.5bps -> small rvol, nonzero
+        for sec in range(40, 300, 5):
+            s.on_tick(_row(sec, move_pct=0.005 * (1 if (sec // 5) % 2 else -1), yes_mid=0.50),
+                      pf, rng)
+        # smooth ramp 1bps/sec for 12s: cumulative vel_10s ~10bps, per-tick diff tiny
+        st = "FLAT"
+        for k, sec in enumerate(range(300, 313)):
+            move = 0.05 + 0.01 * k          # 5bps -> 17bps
+            s.on_tick(_row(sec, move_pct=move, yes_mid=0.50, yes_ask=0.51), pf, rng)
+            st = s.state
+        return st
+    if run(None) != "HOLDING":
+        pytest.skip("base ramp series did not fire; gate test n/a")
+    assert run(10.0) == "FLAT"   # entry dist ~12-17bps > 10 cap -> blocked
+
+
 def test_settle_loss_and_ctx():
     s, pf = StaleQuoteState("btc-updown-15m-1", _params(), 900), _pf()
     # manually place a HOLDING position

@@ -49,6 +49,40 @@ class RollingMove:
         return (var ** 0.5) * 100.0
 
 
+class ResearchRVol:
+    """EXACT live mirror of research.features.core.realized_vol_per_sec(window=60):
+    the `realized_vol` feature the settlement-print model was fit on.
+
+    Research definition (per window, rows in tick order): diffs = np.diff(move_pct,
+    prepend=move_pct[0]) — so diffs[0] == 0.0 — and value at row i = POPULATION std
+    (ddof=0) of the trailing min(i+1, 60) diffs, or 0.0 when fewer than 2 rows exist.
+    Units: PERCENT (same as move_pct). Push EVERY tick of the window (healthy or
+    not) — the research column is computed on the full tick sequence BEFORE any
+    book-health filtering.
+
+    NOT the same as RollingMove.rvol_bps (which windows by SECONDS and returns bps);
+    do not merge them — this one is parity-pinned by
+    tests/research/test_print_model_parity.py.
+    """
+
+    def __init__(self, window: int = 60):
+        self._diffs = deque(maxlen=window)
+        self._prev: float | None = None
+
+    def push(self, move_pct: float) -> None:
+        d = 0.0 if self._prev is None else (move_pct - self._prev)
+        self._prev = move_pct
+        self._diffs.append(d)
+
+    def value(self) -> float:
+        n = len(self._diffs)
+        if n < 2:
+            return 0.0
+        m = sum(self._diffs) / n
+        var = sum((x - m) ** 2 for x in self._diffs) / n
+        return var ** 0.5
+
+
 def utc_hour_dow(ts_ms: int):
     d = dt.datetime.fromtimestamp(ts_ms / 1000, tz=dt.timezone.utc)
     return d.hour, d.weekday()

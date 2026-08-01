@@ -8,7 +8,6 @@ In production we'd split these into 2 processes and use a Unix socket.
 """
 from __future__ import annotations
 import asyncio
-import datetime as dt
 import json
 import os
 import shutil
@@ -20,6 +19,7 @@ import structlog
 from mean_reversion_live.collectors.chainlink_collector import (
     DEFAULT_POLYGON_RPC,
     ChainlinkCsvGzAppender,
+    ChainlinkPriceCache,
     chainlink_loop,
 )
 from mean_reversion_live.collectors.l2_writer import L2CsvGzAppender
@@ -37,51 +37,11 @@ from mean_reversion_live.collectors.ws_collector import WsCollector
 from mean_reversion_live.config import get_settings
 from mean_reversion_live.engine.paper_engine import PaperEngine
 from mean_reversion_live.engine.registry import load_strategies
+from mean_reversion_live.engine.signals_counter import SignalsTodayCounter
 from mean_reversion_live.logging_config import configure_logging
 from mean_reversion_live.markets.discovery import MarketDiscovery
 
 log = structlog.get_logger(__name__)
-
-
-def _count_signals_today(jsonl_root) -> int:
-    """Best-effort count of signal events written since UTC midnight today.
-
-    Uses file mtime + a single read of each signals.jsonl. Cheap enough at 5s
-    cadence. Returns 0 on any error.
-    """
-    try:
-        if not jsonl_root.exists():
-            return 0
-        midnight = int(dt.datetime.now(dt.timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        ).timestamp() * 1000)
-        total = 0
-        for sid_dir in jsonl_root.iterdir():
-            f = sid_dir / "signals.jsonl"
-            if not f.exists():
-                continue
-            # mtime ≥ midnight is the cheap pre-check; we still need to count
-            # only today's lines for accuracy, but if the file hasn't been
-            # touched since midnight we can skip it entirely.
-            try:
-                if f.stat().st_mtime * 1000 < midnight:
-                    continue
-            except OSError:
-                continue
-            try:
-                with open(f, "r") as fh:
-                    for line in fh:
-                        try:
-                            rec = json.loads(line)
-                            if rec.get("ts_ms", 0) >= midnight:
-                                total += 1
-                        except (json.JSONDecodeError, ValueError):
-                            continue
-            except OSError:
-                continue
-        return total
-    except Exception:
-        return 0
 
 
 async def amain() -> None:
@@ -111,6 +71,20 @@ async def amain() -> None:
     trades_writer = TradesCsvGzAppender(settings.data_path / "live_trades")
     spot_ws_writer = SpotCsvGzAppender(settings.data_path / "live_spot")
     chainlink_writer = ChainlinkCsvGzAppender(settings.data_path / "live_chainlink")
+    # In-memory oracle history shared with MarketDiscovery so windows SETTLE on the
+    # Chainlink price (open vs close) Polymarket actually pays — not Coinbase spot.
+    chainlink_cache = ChainlinkPriceCache()
+    # Seamless restart: warm the cache from disk so price_asof works IMMEDIATELY. Without
+    # this the in-memory cache is empty at boot, so windows that opened shortly before the
+    # restart settle on the Coinbase fallback and the determinism dual-oracle gate fail-closes
+    # (skips) for ~15-30min until the collector re-warms it. Best-effort.
+    try:
+        _warmed = chainlink_cache.warm_from_disk(
+            settings.data_path, int(time.time() * 1000), symbols=settings.symbol_list)
+        log.info("chainlink_cache_warmed", reads=_warmed,
+                 symbols=sorted({s.lower() for s in settings.symbol_list}))
+    except Exception as e:  # pragma: no cover - never let warmup block startup
+        log.warning("chainlink_cache_warm_failed", err=str(e))
     polygon_rpc_url = os.environ.get("POLYGON_RPC_URL", DEFAULT_POLYGON_RPC)
 
     # Streams 2 + 3 are network collectors that must keep draining their
@@ -141,7 +115,7 @@ async def amain() -> None:
         _chainlink_stop_holder["event"] = ev
         _chainlink_stop_holder["loop"] = asyncio.get_running_loop()
         await chainlink_loop(chainlink_writer, settings.symbol_list, ev,
-                             rpc_url=polygon_rpc_url)
+                             rpc_url=polygon_rpc_url, cache=chainlink_cache)
 
     def _chainlink_stop():
         ev = _chainlink_stop_holder.get("event")
@@ -164,18 +138,29 @@ async def amain() -> None:
         if ws_collector is not None:
             await ws_collector.update_subscriptions(asset_ids)
 
-    async def on_close(market, end_price):
+    async def on_close(market, end_price, chainlink_start=None, chainlink_end=None):
+        # outcomes.csv keeps the COINBASE basis (end_price) so the research tape stays
+        # comparable to the historical dataset; the chainlink re-merge is done offline.
         try:
             outcome_writer.append(market, end_price)
         except Exception as e:
             log.warning("outcome_write_failed", slug=market.slug, err=str(e))
-        # Settle any open determinism positions for this window at the true outcome.
+        # Settle open determinism positions on the CHAINLINK resolution basis
+        # (Polymarket's oracle); Coinbase end_price is the fallback inside settle_window.
         try:
-            engine.settle_window(market, end_price)
+            engine.settle_window(market, end_price, chainlink_start, chainlink_end)
         except Exception as e:
             log.warning("det_settle_window_failed", slug=market.slug, err=str(e))
 
-    discovery = MarketDiscovery(on_subscribe=on_subscribe, on_close=on_close)
+    discovery = MarketDiscovery(on_subscribe=on_subscribe, on_close=on_close,
+                                # strike frozen at the spot AS-OF window open (kills the
+                                # ~24s-late capture look-ahead; test_ledger XI4 AMENDMENT)
+                                spot_price_asof=spot_cache.price_asof,
+                                chainlink_price_asof=chainlink_cache.price_asof,
+                                # price+updated_at for the per-tick cl_oracle_age_s
+                                # (settlement-print psettle twins); same rows as
+                                # price_asof, so settlement is unchanged.
+                                chainlink_read_asof=chainlink_cache.read_asof)
     ws_collector = WsCollector(
         discovery=discovery,
         spot_cache=spot_cache,
@@ -183,6 +168,7 @@ async def amain() -> None:
         out_queue=tick_queue,
         l2_writer=l2_writer,
         trades_writer=trades_writer,
+        n_shards=settings.ws_shards,
     )
 
     # Paper engine
@@ -211,6 +197,7 @@ async def amain() -> None:
     async def heartbeat():
         path = settings.state_path / "last_tick.json"
         path.parent.mkdir(parents=True, exist_ok=True)
+        signals_counter = SignalsTodayCounter(settings.jsonl_path)
         while not stop.is_set():
             try:
                 try:
@@ -219,7 +206,11 @@ async def amain() -> None:
                     )
                 except OSError:
                     disk_free_gb = None
-                signals_today = _count_signals_today(settings.jsonl_path)
+                # Incremental tail counter — the old full-file re-parse here
+                # (4.4 GB of signals.jsonl every 5s) blocked the event loop
+                # ~42s/tick and starved the WS reader (2026-06-12 outage).
+                # Semantics now: today's signals observed since process start.
+                signals_today = signals_counter.poll(int(time.time() * 1000))
                 hb = {
                     "ts_ms": int(time.time() * 1000),
                     "queue_size": tick_queue.qsize(),

@@ -16,6 +16,17 @@ import structlog
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+try:  # WS message decode is the process's hottest CPU path (profiled 2026-06-12:
+    # stdlib scan_once/scanstring ~30-40% of the core at ~700 msg/s). orjson is
+    # a drop-in C decoder ~8x faster; stdlib remains the fallback.
+    import orjson
+
+    def _loads(raw):
+        return orjson.loads(raw)
+except ImportError:  # pragma: no cover
+    def _loads(raw):
+        return json.loads(raw)
+
 from mean_reversion_live.collectors.l2_writer import L2CsvGzAppender, book_to_l2_row
 from mean_reversion_live.collectors.spot_collector import SpotPriceCache
 from mean_reversion_live.collectors.tick_writer import CrashSafeCsvGzAppender
@@ -111,6 +122,9 @@ class WsCollector:
         out_queue: Optional[asyncio.Queue] = None,
         l2_writer: Optional[L2CsvGzAppender] = None,
         trades_writer: Optional[TradesCsvGzAppender] = None,
+        ws_url: Optional[str] = None,
+        n_shards: int = 4,
+        keepalive_s: float = 5.0,
     ):
         self._discovery = discovery
         self._spot = spot_cache
@@ -122,13 +136,31 @@ class WsCollector:
         self._stop = asyncio.Event()
         self._books: Dict[str, OrderBook] = defaultdict(OrderBook)
         self._desired_subs: Set[str] = set()
+        self._ws_url = ws_url or get_settings().clob_ws_url
+        # Polymarket's WS server enforces a per-CONNECTION message-rate cap and
+        # silently RSTs any connection exceeding it (observed ~1.6k msg/s dies
+        # in ~10s; 15m+5m books together exceed it, each half alone does not —
+        # 2026-06-12 outage). The asset set is therefore sharded across
+        # n_shards independent connections (stable int(token) % n_shards), all
+        # feeding the same _books dict.
+        self._n_shards = max(1, int(n_shards))
+        self._keepalive_s = float(keepalive_s)
         self._ws_lock = asyncio.Lock()
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws_conns: List[Optional[websockets.WebSocketClientProtocol]] = (
+            [None] * self._n_shards)
         # Polymarket CLOB WS accepts the subscription message once per connection.
-        # When the subscription set changes we need to drop the current connection
-        # and reconnect so the new subscribe lands at the start of the new session.
-        self._reconnect_signal = asyncio.Event()
-        self._has_subs = asyncio.Event()  # gates WS startup until first discovery
+        # When a shard's subset changes we drop THAT connection and reconnect so
+        # the new subscribe lands at the start of the new session. Other shards
+        # stay up (15m books must not churn when 5m windows rotate).
+        self._reconnect_signals: List[asyncio.Event] = (
+            [asyncio.Event() for _ in range(self._n_shards)])
+        self._shard_subs: List[Set[str]] = [set() for _ in range(self._n_shards)]
+
+    def _shard_of(self, token_id: str) -> int:
+        try:
+            return int(token_id) % self._n_shards
+        except (TypeError, ValueError):
+            return hash(token_id) % self._n_shards
 
     def stop(self) -> None:
         self._stop.set()
@@ -137,8 +169,8 @@ class WsCollector:
         """Called by MarketDiscovery when the active set changes.
 
         Polymarket CLOB WS only honors the subscription sent at session start.
-        We update the desired-subs set + signal ws_consume to drop the current
-        connection so the next reconnect sends the updated subscribe.
+        We split the set across shards; ONLY shards whose subset changed get
+        their connection dropped so the next reconnect sends the new subscribe.
         """
         new_set = set(asset_ids)
         if new_set == self._desired_subs:
@@ -149,48 +181,69 @@ class WsCollector:
         stale = [tok for tok in self._books if tok not in new_set]
         for tok in stale:
             del self._books[tok]
-        log.info("ws_subscriptions_updated", n=len(asset_ids), books_gc=len(stale))
-        self._has_subs.set()
-        # Force reconnect by closing the current WS (if any).
-        self._reconnect_signal.set()
+        new_shards: List[Set[str]] = [set() for _ in range(self._n_shards)]
+        for tok in new_set:
+            new_shards[self._shard_of(tok)].add(tok)
+        changed = [i for i in range(self._n_shards)
+                   if new_shards[i] != self._shard_subs[i]]
+        self._shard_subs = new_shards
+        log.info("ws_subscriptions_updated", n=len(asset_ids), books_gc=len(stale),
+                 shards_changed=changed)
+        # Force reconnect of the changed shards by closing their WS (if any).
+        for i in changed:
+            self._reconnect_signals[i].set()
         async with self._ws_lock:
-            ws = self._ws
-            if ws is not None:
-                try:
-                    await ws.close()
-                except Exception:
-                    pass
+            for i in changed:
+                ws = self._ws_conns[i]
+                if ws is not None:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
 
-    async def _ws_consume(self) -> None:
-        url = get_settings().clob_ws_url
+    async def _keepalive(self, ws) -> None:
+        """App-level heartbeat. Polymarket idle-kills clients that never send;
+        the protocol-level PING frames of the websockets lib do not count."""
+        while True:
+            await asyncio.sleep(self._keepalive_s)
+            await ws.send("PING")
+
+    async def _ws_consume(self, shard: int) -> None:
+        url = self._ws_url
         backoff = 1.0
-        # Wait for first subscription before opening the WS — Polymarket only
-        # accepts the subscribe sent at session start.
-        log.info("ws_waiting_for_subscriptions")
-        try:
-            await asyncio.wait_for(self._has_subs.wait(), timeout=120.0)
-        except asyncio.TimeoutError:
-            log.error("ws_no_subscriptions_in_120s")
-            return
+        log.info("ws_waiting_for_subscriptions", shard=shard)
         while not self._stop.is_set():
-            self._reconnect_signal.clear()
+            if not self._shard_subs[shard]:
+                # Nothing for this shard yet — wait for a subscription change.
+                sig_task = asyncio.create_task(self._reconnect_signals[shard].wait())
+                stop_task = asyncio.create_task(self._stop.wait())
+                await asyncio.wait([sig_task, stop_task],
+                                   return_when=asyncio.FIRST_COMPLETED)
+                for t in (sig_task, stop_task):
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                self._reconnect_signals[shard].clear()
+                continue
+            self._reconnect_signals[shard].clear()
             try:
                 async with websockets.connect(url, ping_interval=30, ping_timeout=20) as ws:
                     async with self._ws_lock:
-                        self._ws = ws
-                    subs = sorted(self._desired_subs)
-                    if not subs:
-                        log.warning("ws_no_subs_skip_send")
-                    else:
-                        await ws.send(json.dumps({"type": "market", "assets_ids": subs}))
-                        log.info("ws_subscribed", n_assets=len(subs))
+                        self._ws_conns[shard] = ws
+                    subs = sorted(self._shard_subs[shard])
+                    await ws.send(json.dumps({"type": "market", "assets_ids": subs}))
+                    log.info("ws_subscribed", shard=shard, n_assets=len(subs))
                     backoff = 1.0
-                    # Race: either the WS yields a message OR a reconnect is signaled.
+                    # Race: WS yields/dies, keepalive dies, reconnect signaled, or stop.
                     recv_task = asyncio.create_task(self._recv_loop(ws))
-                    reconnect_task = asyncio.create_task(self._reconnect_signal.wait())
+                    ka_task = asyncio.create_task(self._keepalive(ws))
+                    reconnect_task = asyncio.create_task(
+                        self._reconnect_signals[shard].wait())
                     stop_task = asyncio.create_task(self._stop.wait())
                     done, pending = await asyncio.wait(
-                        [recv_task, reconnect_task, stop_task],
+                        [recv_task, ka_task, reconnect_task, stop_task],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     for t in pending:
@@ -199,16 +252,27 @@ class WsCollector:
                             await t
                         except (asyncio.CancelledError, Exception):
                             pass
+                    # Retrieve completed-task exceptions: makes the death VISIBLE
+                    # (the old single-conn path dropped them -> silent reconnect
+                    # churn + asyncio 'Task exception was never retrieved' spam).
+                    if recv_task in done:
+                        exc = recv_task.exception()
+                        log.warning("ws_recv_ended", shard=shard,
+                                    err=str(exc) if exc else "clean")
+                    if ka_task in done:
+                        exc = ka_task.exception()
+                        log.warning("ws_keepalive_ended", shard=shard,
+                                    err=str(exc) if exc else "clean")
                     if reconnect_task in done and not self._stop.is_set():
-                        log.info("ws_reconnect_requested")
+                        log.info("ws_reconnect_requested", shard=shard)
                         # Drop out of the async-with to close + loop reconnects
                         continue
             except (ConnectionClosed, WebSocketException, asyncio.TimeoutError, OSError) as e:
                 if self._stop.is_set():
                     break
-                log.warning("ws_disconnect", err=str(e), backoff=backoff)
+                log.warning("ws_disconnect", shard=shard, err=str(e), backoff=backoff)
                 async with self._ws_lock:
-                    self._ws = None
+                    self._ws_conns[shard] = None
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=min(backoff, 30.0))
                 except asyncio.TimeoutError:
@@ -220,8 +284,8 @@ class WsCollector:
             if self._stop.is_set():
                 break
             try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
+                payload = _loads(raw)
+            except ValueError:  # covers json.JSONDecodeError + orjson.JSONDecodeError
                 continue
             if isinstance(payload, dict):
                 payload = [payload]
@@ -335,6 +399,92 @@ class WsCollector:
             spread_yes = (yba - ybb) if (ybb > 0 and yba > 0) else 0.0
             spread_no = (nba - nbb) if (nbb > 0 and nba > 0) else 0.0
             total_mid = yes_mid + no_mid
+            # Dual-oracle: Chainlink distance-from-strike at this tick. The strike (cl_start) is
+            # captured at window open in discovery._chainlink_start[slug]; cl_spot is the latest
+            # Chainlink read at-or-before now. NaN when Chainlink is unavailable -> the engine's
+            # determinism gate treats it as "missing" (fail-closed). Goes into the in-memory dict
+            # only (the CSV writer ignores keys outside TICK_COLUMNS, so the schema is unchanged).
+            #
+            # Settlement-print model features (mode="psettle" twins, 2026-06-11), same research
+            # conventions as research/dataset/chainlink_merge.py + oracle_print_model:
+            #   cl_cb_basis_bps = (chainlink/coinbase - 1)*1e4 at the tick (no strike involved)
+            #   cl_oracle_age_s = tick time (s) - round updated_at of the read visible now
+            # Both NaN when unavailable; the psettle gate fails closed on NaN.
+            cl_dist_bps = float("nan")
+            cl_cb_basis_bps = float("nan")
+            cl_oracle_age_s = float("nan")
+            cl_asof = getattr(self._discovery, "_chainlink_price_asof", None)
+            cl_read = getattr(self._discovery, "_chainlink_read_asof", None)
+            cl_start = self._discovery._chainlink_start.get(slug) if hasattr(
+                self._discovery, "_chainlink_start") else None
+            cl_spot = None
+            cl_upd = None
+            if cl_read is not None:
+                r = cl_read(m.symbol, ts_ms)
+                if r is not None:
+                    cl_spot, cl_upd = r
+            elif cl_asof is not None:
+                cl_spot = cl_asof(m.symbol, ts_ms)
+            if cl_spot and cl_spot > 0:
+                if cl_start and cl_start > 0:
+                    cl_dist_bps = (cl_spot / cl_start - 1.0) * 1e4
+                if coinbase_price > 0:
+                    cl_cb_basis_bps = (cl_spot / coinbase_price - 1.0) * 1e4
+                if cl_upd is not None and cl_upd > 0:
+                    # research: clip(tick_s - updated_at, 0, None)
+                    cl_oracle_age_s = max(0.0, float(second_ts) - float(cl_upd))
+            # Cross-book (mode="xb") fields: the CO-TERMINAL 5m market's YES
+            # top-of-book + captured strike, read at THIS second from the same
+            # `_books` dict this pass reads the 15m books from — so the engine's
+            # co5 view equals the 5m tick CSV row at the same second (the join
+            # the XI4 research used). 15m rows only, last 300s of the window
+            # (the 5m overlap). xb5_k5 stays NaN until discovery captures the 5m
+            # strike (start_price>0) — entries before capture are impossible:
+            # the CAUSAL constraint of xb_5m15m_causal_v1 (test_ledger § "XI4
+            # AMENDMENT 2026-06-12"). All NaN fields fail closed in the engine.
+            # Engine-only keys: the fixed-schema CSV writer ignores them.
+            xb5_yes_bid = xb5_yes_ask = float("nan")
+            xb5_yes_bid_sz = xb5_yes_ask_sz = xb5_k5 = float("nan")
+            sec_iw = second_ts - m.window_start_ts
+            if (m.window_end_ts - m.window_start_ts) == 900 and sec_iw >= 600:
+                co5 = active.get(f"{m.symbol}-updown-5m-{m.window_start_ts + 600}")
+                if (co5 is not None
+                        and co5.window_start_ts == m.window_start_ts + 600
+                        and co5.window_end_ts == m.window_end_ts):     # co-terminal
+                    co5_yes = self._books.get(co5.yes_token_id)
+                    co5_no = self._books.get(co5.no_token_id)
+                    # Require BOTH books, mirroring this loop's own emit guard —
+                    # so xb fields exist exactly when the co5 CSV row does.
+                    if co5_yes is not None and co5_no is not None:
+                        b5, a5, b5_sz, a5_sz = co5_yes.best_bid_ask()
+                        xb5_yes_bid, xb5_yes_ask = b5, a5
+                        xb5_yes_bid_sz, xb5_yes_ask_sz = b5_sz, a5_sz
+                        if co5.start_price and co5.start_price > 0:
+                            xb5_k5 = float(co5.start_price)
+            # Mirror image for mode="xb5y" (Edge Hunt v3 g2bps-5y family): on the
+            # CO-TERMINAL 5m market's rows, attach the parent 15m market's YES
+            # top-of-book + strike, read at THIS second from the same `_books`
+            # dict — so the engine's co15 view equals the 15m tick CSV row at the
+            # same second (the xbook.py join convention). Only 5m windows whose
+            # close aligns with a 15m close carry these; all NaN fields fail
+            # closed in the engine. Engine-only keys (CSV writer ignores them).
+            xb15_yes_bid = xb15_yes_ask = float("nan")
+            xb15_yes_bid_sz = xb15_k15 = float("nan")
+            # Co-terminality is verified RELATIVELY (parent starts 600s before us,
+            # same close) — only the last 5m window of a 15m parent can match.
+            if (m.window_end_ts - m.window_start_ts) == 300:
+                co15 = active.get(f"{m.symbol}-updown-15m-{m.window_start_ts - 600}")
+                if (co15 is not None
+                        and co15.window_start_ts == m.window_start_ts - 600
+                        and co15.window_end_ts == m.window_end_ts):   # co-terminal
+                    co15_yes = self._books.get(co15.yes_token_id)
+                    co15_no = self._books.get(co15.no_token_id)
+                    if co15_yes is not None and co15_no is not None:
+                        b15, a15, b15_sz, _ = co15_yes.best_bid_ask()
+                        xb15_yes_bid, xb15_yes_ask = b15, a15
+                        xb15_yes_bid_sz = b15_sz
+                        if co15.start_price and co15.start_price > 0:
+                            xb15_k15 = float(co15.start_price)
             row = {
                 "timestamp_ms": ts_ms,
                 "market_slug": slug,
@@ -351,6 +501,18 @@ class WsCollector:
                 "no_bid_depth": nbd,
                 "no_ask_depth": nad,
                 "chainlink_price": 0.0,  # not used; column reserved for future Chainlink
+                "cl_dist_bps": cl_dist_bps,  # engine-only (ignored by the fixed-schema CSV writer)
+                "cl_cb_basis_bps": cl_cb_basis_bps,  # engine-only (psettle model feature)
+                "cl_oracle_age_s": cl_oracle_age_s,  # engine-only (psettle model feature)
+                "xb5_yes_bid": xb5_yes_bid,  # engine-only (mode="xb" co-terminal 5m book)
+                "xb5_yes_ask": xb5_yes_ask,  # engine-only (mode="xb")
+                "xb5_yes_bid_sz": xb5_yes_bid_sz,  # engine-only (mode="xb")
+                "xb5_yes_ask_sz": xb5_yes_ask_sz,  # engine-only (mode="xb")
+                "xb5_k5": xb5_k5,  # engine-only (mode="xb"; NaN until 5m strike captured)
+                "xb15_yes_bid": xb15_yes_bid,  # engine-only (mode="xb5y" co-terminal 15m book)
+                "xb15_yes_ask": xb15_yes_ask,  # engine-only (mode="xb5y")
+                "xb15_yes_bid_sz": xb15_yes_bid_sz,  # engine-only (mode="xb5y")
+                "xb15_k15": xb15_k15,  # engine-only (mode="xb5y"; NaN until 15m strike captured)
                 "coinbase_price": coinbase_price,
                 "start_price": sp,
                 "move_pct": round(move_pct, 6),
@@ -397,14 +559,15 @@ class WsCollector:
         return emitted
 
     async def run(self) -> None:
-        ws_task = asyncio.create_task(self._ws_consume())
-        agg_task = asyncio.create_task(self._aggregator())
+        tasks = [asyncio.create_task(self._ws_consume(i))
+                 for i in range(self._n_shards)]
+        tasks.append(asyncio.create_task(self._aggregator()))
         try:
             await self._stop.wait()
         finally:
-            ws_task.cancel()
-            agg_task.cancel()
-            for t in (ws_task, agg_task):
+            for t in tasks:
+                t.cancel()
+            for t in tasks:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):

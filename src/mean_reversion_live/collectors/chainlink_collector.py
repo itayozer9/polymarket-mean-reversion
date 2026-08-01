@@ -37,10 +37,12 @@ Feed addresses (Polygon mainnet, verified against docs.chain.link):
 """
 from __future__ import annotations
 import asyncio
+import bisect
 import datetime as dt
 import gzip
 import threading
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -55,15 +57,23 @@ CHAINLINK_FEEDS: Dict[str, str] = {
     "eth": "0xF9680D99D6C9589e2a93a78A04A279e509205945",
     "sol": "0x10C8264C0935b3B9870013e057f330Ff3e9C56dC",
     "xrp": "0x785ba89291f676b5386652eB12b30cF361020694",
+    # Capacity expansion 2026-07-17 — both verified live against Coinbase spot (<0.1% diff).
+    "bnb": "0x82a6c4AF830caa6c97bb504425f6A66165C2c26e",
+    "doge": "0xbaf9327b6564454F4a3364C33eFeEf032b4b4444",
+    # hype: no Chainlink aggregator on Polygon — chainlink_loop skips symbols absent here;
+    # oracle-gated strategies fail closed (skip) on hype, which is the intended behaviour.
 }
 
 # All Chainlink USD feeds use 8 decimals; confirmed live for all four above.
 CHAINLINK_DECIMALS = 8
 
-# Public Polygon RPC. polygon-rpc.com / ankr / drpc now gate behind API keys;
-# the Tenderly public gateway answers `eth_call` for Chainlink feeds unauthed.
+# Public Polygon RPC. polygon-rpc.com / ankr / drpc now gate behind API keys.
 # Override with the POLYGON_RPC_URL env var if this endpoint rate-limits.
-DEFAULT_POLYGON_RPC = "https://polygon.gateway.tenderly.co"
+# 2026-07-25: was the Tenderly public gateway, which went dead (TLS hostname mismatch,
+# then no response at all) and took the whole Chainlink feed down for 32h with zero
+# successful fetches — a dead DEFAULT is silent, so it must point somewhere alive.
+# publicnode verified answering both eth_blockNumber and eth_call on the BTC/USD feed.
+DEFAULT_POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 
 # `latestRoundData()` function selector (first 4 bytes of keccak256 signature).
 _LATEST_ROUND_DATA_SELECTOR = "0xfeaf968c"
@@ -114,6 +124,162 @@ def decode_latest_round_data(hex_result: str) -> Optional[Dict[str, int]]:
         "updated_at": words[3],
         "answered_in_round": words[4],
     }
+
+
+class ChainlinkPriceCache:
+    """Thread-safe in-memory history of recent Chainlink reads.
+
+    The Chainlink feed is polled on its own collector thread (see run_combined),
+    but window settlement happens on the MAIN event loop (MarketDiscovery.on_close).
+    This cache bridges the two: the loop `record()`s every read; discovery
+    `price_asof()`s the oracle value at a window boundary.
+
+    Keyed on our POLL time (`timestamp_ms`), which matches the offline re-settle
+    (`research/analysis/oracle_settlement_gap.py` merges the chainlink feed on
+    `timestamp_ms` with a 120 s backward tolerance) — so the live bot settles on the
+    same basis the analysis validated. `price_asof(sym, t)` returns the latest read
+    at-or-before `t`, but ONLY if it is within `tolerance_ms`; otherwise None, and the
+    caller falls back to Coinbase rather than settling on a stale oracle.
+    """
+
+    def __init__(self, max_keep_ms: int = 2_400_000):  # keep ~40 min of history
+        self._ts: Dict[str, List[int]] = defaultdict(list)   # symbol -> sorted poll ts (ms)
+        self._px: Dict[str, List[float]] = defaultdict(list)  # symbol -> price, parallel to _ts
+        # round updated_at (s epoch), parallel to _ts; NaN when the poll row lacked it.
+        # Feeds the engine's cl_oracle_age_s (settlement-print model feature) — the
+        # research definition is tick_ts - updated_at of the round visible at the tick.
+        self._upd: Dict[str, List[float]] = defaultdict(list)
+        self._max_keep_ms = max_keep_ms
+        self._lock = threading.Lock()
+
+    def record(self, symbol: str, ts_ms: int, price: float,
+               updated_at: Optional[float] = None) -> None:
+        if price is None or price <= 0 or not ts_ms:
+            return
+        try:
+            upd = float(updated_at) if updated_at else float("nan")
+        except (TypeError, ValueError):
+            upd = float("nan")
+        sym = symbol.lower()
+        with self._lock:
+            ts = self._ts[sym]
+            px = self._px[sym]
+            ud = self._upd[sym]
+            if ts and ts_ms < ts[-1]:           # out-of-order (rare); keep sorted
+                i = bisect.bisect_right(ts, ts_ms)
+                ts.insert(i, ts_ms)
+                px.insert(i, price)
+                ud.insert(i, upd)
+            else:
+                ts.append(ts_ms)
+                px.append(price)
+                ud.append(upd)
+            cutoff = ts_ms - self._max_keep_ms   # evict stale history
+            if ts and ts[0] < cutoff:
+                k = bisect.bisect_left(ts, cutoff)
+                del ts[:k]
+                del px[:k]
+                del ud[:k]
+
+    def price_asof(self, symbol: str, t_ms: int, tolerance_ms: int = 120_000) -> Optional[float]:
+        """Latest Chainlink price at-or-before `t_ms`, or None if the nearest prior
+        read is older than `tolerance_ms` (oracle gap -> don't settle on it)."""
+        r = self.read_asof(symbol, t_ms, tolerance_ms)
+        return None if r is None else r[0]
+
+    def read_asof(self, symbol: str, t_ms: int,
+                  tolerance_ms: int = 120_000) -> Optional[tuple]:
+        """Latest Chainlink read at-or-before `t_ms` as (price, updated_at_s).
+
+        Same bisect/tolerance as price_asof (which now delegates here, so both
+        return the SAME row). `updated_at_s` is the round's on-chain refresh time
+        (s epoch), or None when the recorded poll row lacked it — the caller's
+        cl_oracle_age_s must then be treated as missing (fail-closed)."""
+        sym = symbol.lower()
+        with self._lock:
+            ts = self._ts.get(sym)
+            px = self._px.get(sym)
+            ud = self._upd.get(sym)
+            if not ts:
+                return None
+            i = bisect.bisect_right(ts, t_ms)
+            if i == 0:
+                return None
+            if t_ms - ts[i - 1] > tolerance_ms:
+                return None
+            upd = ud[i - 1] if ud is not None and len(ud) == len(ts) else float("nan")
+            return px[i - 1], (upd if upd == upd else None)
+
+    def latest(self, symbol: str) -> Optional[float]:
+        sym = symbol.lower()
+        with self._lock:
+            px = self._px.get(sym)
+            return px[-1] if px else None
+
+    def warm_from_disk(self, data_dir, now_ms: int, symbols=None,
+                       lookback_ms: Optional[int] = None) -> int:
+        """Pre-load recent reads from `data/live_chainlink/*.csv.gz` so `price_asof`
+        works IMMEDIATELY after a restart. The cache is in-memory and otherwise empty
+        until the collector polls; without this, windows that opened shortly before a
+        restart settle on the Coinbase fallback AND the determinism dual-oracle gate
+        fail-closes (skips) for ~15-30min until the cache + strike capture catch up.
+        Loads only the recent window (default ~40min) from today's/yesterday's files,
+        skipping `_hist` backfills. Best-effort; never raises. Returns reads loaded."""
+        lookback_ms = lookback_ms or self._max_keep_ms
+        cutoff = now_ms - lookback_ms
+        base = Path(data_dir) / "live_chainlink"
+        if not base.exists():
+            return 0
+        want = {s.lower() for s in symbols} if symbols else None
+        dates = {_utc_date_str(cutoff), _utc_date_str(now_ms)}
+        n = 0
+        for f in sorted(base.glob("*.csv.gz")):
+            name = f.name
+            if "_hist" in name or not any(name.endswith(d + ".csv.gz") for d in dates):
+                continue
+            try:
+                with gzip.open(f, "rt") as fh:
+                    header = fh.readline().rstrip("\n").split(",")
+                    try:
+                        i_ts, i_sym, i_px = (header.index("timestamp_ms"),
+                                             header.index("symbol"), header.index("price"))
+                    except ValueError:
+                        continue
+                    # updated_at is in CHAINLINK_COLUMNS from day one, but stay
+                    # tolerant of hand-rolled/older files that lack the column.
+                    try:
+                        i_upd = header.index("updated_at")
+                    except ValueError:
+                        i_upd = -1
+                    mx = max(i_ts, i_sym, i_px, i_upd)
+                    for line in fh:
+                        parts = line.rstrip("\n").split(",")
+                        if len(parts) <= mx:
+                            continue
+                        try:
+                            ts = int(parts[i_ts])
+                        except ValueError:
+                            continue
+                        if ts < cutoff:
+                            continue
+                        try:
+                            px = float(parts[i_px])
+                        except ValueError:
+                            continue
+                        sym = parts[i_sym].lower()
+                        if want and sym not in want:
+                            continue
+                        upd = None
+                        if i_upd >= 0:
+                            try:
+                                upd = float(parts[i_upd])
+                            except ValueError:
+                                upd = None
+                        self.record(sym, ts, px, updated_at=upd)
+                        n += 1
+            except (OSError, EOFError):
+                continue
+        return n
 
 
 class ChainlinkCsvGzAppender:
@@ -202,6 +368,7 @@ async def chainlink_loop(
     stop_event: asyncio.Event,
     rpc_url: str = DEFAULT_POLYGON_RPC,
     poll_interval_sec: float = 15.0,
+    cache: Optional[ChainlinkPriceCache] = None,
 ) -> None:
     """Poll each Chainlink feed every `poll_interval_sec` and write a row.
 
@@ -249,6 +416,9 @@ async def chainlink_loop(
                         "oracle_age_s": (now_ms // 1000) - updated_at if updated_at else "",
                     }
                     writer.append(row)
+                    if cache is not None:
+                        cache.record(symbol, now_ms, price,
+                                     updated_at=updated_at or None)
                     rows_ok += 1
                 except Exception as e:
                     rows_err += 1

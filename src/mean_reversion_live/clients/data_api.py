@@ -157,21 +157,29 @@ async def fetch_activity(
     session: aiohttp.ClientSession,
     wallet: str,
     *,
-    page_size: int = 1000,
+    page_size: int = 500,
     max_records: Optional[int] = None,
 ) -> List[ActivityRecord]:
     """Fetch a wallet's activity history (newest first), paginating fully.
 
     Args:
         wallet:      the trader's proxyWallet address
-        page_size:   per-request limit (data-api caps this at 1000)
+        page_size:   per-request limit (data-api 400s above 500)
         max_records: stop once this many records are collected; None = all
 
     Pagination advances ``offset`` by ``page_size`` and stops on a page
     shorter than ``page_size`` (end of history) or when ``max_records`` is hit.
+
+    DO NOT pass a small ``max_records`` when computing P&L. A losing market
+    emits ONE activity record (the BUY); a winner emits two (BUY + REDEEM).
+    Truncating the history therefore strands redeems whose buy fell outside the
+    window, and any caller that pairs them reads those as pure profit — that is
+    exactly how the status cross-check reported +$272 on a -$49 book (2026-07-24).
     """
     base = get_settings().data_api_base_url
-    page_size = max(1, min(page_size, 1000))
+    # ponytail: 500 is the endpoint's hard limit (>500 => HTTP 400), and offset
+    # is capped at 3000 server-side, so ~3500 records is all that's reachable.
+    page_size = max(1, min(page_size, 500))
     out: List[ActivityRecord] = []
     offset = 0
     while True:
@@ -202,6 +210,9 @@ async def fetch_activity(
         if len(data) < limit:
             break
         offset += page_size
+        if offset > 3000:  # server rejects deeper offsets with HTTP 400
+            log.warning("activity.offset_cap", wallet=wallet, total=len(out))
+            break
     if max_records is not None:
         return out[:max_records]
     return out
@@ -211,15 +222,29 @@ async def fetch_positions(
     session: aiohttp.ClientSession,
     wallet: str,
 ) -> List[dict]:
-    """Fetch a wallet's current open positions as raw dicts (single GET).
+    """Fetch a wallet's positions as raw dicts, paginating fully.
 
     Returns the raw API objects unmodified — callers downstream decide which
     fields they need.
+
+    ``sizeThreshold=0`` is required: the endpoint defaults to 1.0 and silently
+    drops sub-1-share partial fills, which are real (and often winning)
+    positions. Without paging the default page is 100, so a wallet with more
+    open markets loses the tail — and a caller that reads "no position record"
+    as "unresolved" mislabels those markets.
     """
     base = get_settings().data_api_base_url
-    data = await get_json(session, f"{base}/positions", params={"user": wallet})
-    if not isinstance(data, list):
-        log.warning("positions.unexpected_payload", wallet=wallet, type=type(data).__name__)
-        return []
-    log.info("positions.fetched", wallet=wallet, count=len(data))
-    return data
+    out: List[dict] = []
+    offset = 0
+    while True:
+        params = {"user": wallet, "limit": "500", "offset": str(offset), "sizeThreshold": "0"}
+        data = await get_json(session, f"{base}/positions", params=params)
+        if not isinstance(data, list):
+            log.warning("positions.unexpected_payload", wallet=wallet, type=type(data).__name__)
+            break
+        out.extend(data)
+        if len(data) < 500:
+            break
+        offset += 500
+    log.info("positions.fetched", wallet=wallet, count=len(out))
+    return out

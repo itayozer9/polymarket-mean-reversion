@@ -15,6 +15,9 @@ _SYMBOL_TO_CB = {
     "eth": "ETH-USD",
     "sol": "SOL-USD",
     "xrp": "XRP-USD",
+    "bnb": "BNB-USD",
+    "doge": "DOGE-USD",
+    "hype": "HYPE-USD",
 }
 
 

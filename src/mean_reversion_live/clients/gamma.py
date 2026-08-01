@@ -97,6 +97,23 @@ def _parse_market_doc(slug: str, market_doc: dict) -> Optional["MarketInfo"]:
     )
 
 
+def candidate_window_starts(tf: str, now: int) -> List[int]:
+    """Window-start candidates for discovery: previous, current, next 2 slots.
+
+    5m windows are filtered to CO-TERMINAL ones only (start :10/:25/:40/:55,
+    ending on a quarter boundary): they're the only 5m books anything reads —
+    the engine's mode="xb" co5 lookup and research's ticks5m_coterminal join.
+    The other two-thirds were pure WS load; with the full 5m set subscribed
+    the collector saturated a core and its WS connections died every ~25-30s
+    from inbound backlog (2026-06-12 zero-fill outage).
+    """
+    dur = 300 if tf == "5m" else 900
+    starts = [((now // dur) + k) * dur for k in (-1, 0, 1, 2)]
+    if tf == "5m":
+        starts = [s for s in starts if (s + 300) % 900 == 0]
+    return starts
+
+
 async def list_active_markets(
     session: aiohttp.ClientSession,
     symbols: List[str],
@@ -109,18 +126,14 @@ async def list_active_markets(
     which puts the long 24h-trading markets first; the markets whose 5m/15m
     PRICE OBSERVATION window is happening RIGHT NOW are buried deep or
     not returned at all. We probe `/markets?slug=...` directly with the
-    expected slugs for the current observation window plus ±2 future slots.
+    expected slugs for the current observation window plus future slots.
     """
     import time
     now = int(time.time())
     out: List[MarketInfo] = []
     candidate_slugs: List[str] = []
     for tf in timeframes:
-        dur = 300 if tf == "5m" else 900
-        # Current observation window plus next 2 future slots (so we can
-        # warm up our books before the new window opens).
-        for k in (-1, 0, 1, 2):
-            window_start_ts = ((now // dur) + k) * dur
+        for window_start_ts in candidate_window_starts(tf, now):
             for sym in symbols:
                 candidate_slugs.append(f"{sym}-updown-{tf}-{window_start_ts}")
     # Probe each candidate concurrently

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     clob_base_url: str = "https://clob.polymarket.com"
     clob_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     data_api_base_url: str = "https://data-api.polymarket.com"
+    # Polymarket WS shards: the server rate-caps each connection (~1.6k msg/s
+    # observed kill); 15m+5m books on one connection exceed it (2026-06-12).
+    ws_shards: int = 4
 
     coinbase_base_url: str = "https://api.coinbase.com"
 

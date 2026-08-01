@@ -161,6 +161,9 @@ class DetParams:
     #   "disagree"   — book favourite DISAGREES with spot (E4), buy the cheap
     #                  spot-implied side the book has as underdog. Verified edge
     #                  (docs/research/IMPROVEMENT_FINDINGS_2026-06-04.md).
+    #   "xb5y"       — runs on the CO-TERMINAL 5m market: buy OWN YES when the
+    #                  parent 15m book strictly dominates it (Edge Hunt v3
+    #                  g2bps-5y survivors; see _xb5y_entry).
     mode: str = "consistent"
     fixed_bet_usd: float = 10.0
     fee_rate: float = 0.07
@@ -285,12 +288,12 @@ class DeterminismState:
             if params.psettle_on_missing != "skip":
                 raise ValueError("psettle_on_missing only supports 'skip' (fail-closed)")
             self._rv = ResearchRVol()
-        # mode="xb": fail-fast config check (cross-book 5m↔15m twin).
-        if params.mode == "xb":
+        # mode="xb"/"xb5y": fail-fast config check (cross-book 5m↔15m twins).
+        if params.mode in ("xb", "xb5y"):
             if params.xb_premium is None:
-                raise ValueError("mode='xb' requires xb_premium")
+                raise ValueError(f"mode={params.mode!r} requires xb_premium")
             if params.xb_gap_min_bps is None:
-                raise ValueError("mode='xb' requires xb_gap_min_bps")
+                raise ValueError(f"mode={params.mode!r} requires xb_gap_min_bps")
             if params.xb_on_missing != "skip":
                 raise ValueError("xb_on_missing only supports 'skip' (fail-closed)")
         # mode="tadiv_approx": fail-fast config check (TA-divergence approximation twin).
@@ -356,6 +359,11 @@ class DeterminismState:
         #    psettle — returns here, legacy flow below byte-identical. ──
         if self.p.mode == "xb":
             return self._xb_entry(row, d, ts, time_left, move, ymid, portfolio)
+
+        # ── mode="xb5y": the mirror leg — runs ON the co-terminal 5m market,
+        #    buys OWN YES. Same separate-path pattern, legacy flow untouched. ──
+        if self.p.mode == "xb5y":
+            return self._xb5y_entry(row, d, ts, time_left, move, ymid, portfolio)
 
         # ── mode="tadiv_approx": TA-divergence approximation entry. Same separate-
         #    path pattern as psettle/xb — returns here, legacy flow byte-identical. ──
@@ -661,6 +669,93 @@ class DeterminismState:
         self.pos = {"side": side, "entry": ask, "shares": shares,
                     "bet": p.fixed_bet_usd,
                     "fee_entry": _fee(shares, ask, p.fee_rate),
+                    "ts": ts, "entry_sec": sec, "ctx": ctx}
+        self.state = "HOLDING"
+        portfolio.on_entry(ts)
+        if self._guard is not None:
+            self._guard.on_entry(ts, self.slug, self.pos["bet"] + self.pos["fee_entry"])
+        d["decision"] = "fired"; d["side_signal"] = side
+        d["features"] = {"fav_ask": ctx["entry_ask"], "time_left": time_left,
+                         "xb_gap_bps": ctx["xb_gap_bps"], "xb_edge": ctx["xb_edge"],
+                         "eff_max_ask": round(p.max_ask, 4)}
+        self._emit(d)
+        return None
+
+    def _xb5y_entry(self, row, d: dict, ts: int, time_left: int, move: float,
+                    ymid: float, portfolio: Portfolio) -> None:
+        """mode="xb5y" gate + entry — live twin of the Edge Hunt v3 g2bps-5y
+        survivors (test_ledger "EDGE HUNT v3 VERDICTS": xh_5y_m02_g02_b600-900,
+        +$1.02/$5fill CI-lo>0 on the never-mined 07-03..07-23 window).
+
+        Runs ON the co-terminal 5m market (window_start % 900 == 600). Dominance
+        logic: own strike K5 below the parent 15m strike K15 by >= xb_gap_min_bps
+        makes own YES (close >= K5) a SUPERSET of the 15m YES (close >= K15), so
+        fair(own YES) >= fair(15m YES) >= its bid. A tradeable violation — own
+        YES ask + xb_premium <= the 15m YES bid — means own YES is strictly
+        underpriced: buy it, hold to own resolution. Research parity (xbook.py
+        5y leg): m_5y = yes15_bid - yes5_ask >= premium; gap <= -g;
+        ref_5y_usd = yes15_bid * yes15_bid_depth >= xb_min_ref_usd; entry at
+        yes5_ask <= max_ask. Own-book health = the shared on_tick gate (research
+        _sane_book on t5); the 15m reference book gets the same sane filter here
+        (research book_healthy on t15). Every NaN xb15_* field fails closed —
+        non-co-terminal 5m windows never carry them.
+        """
+        p = self.p
+        sec = int(row["seconds_into_window"])
+        ya = float(row["yes_best_ask"])             # own 5m YES ask (the instrument)
+        k5 = float(row["start_price"])              # own 5m strike
+        y15b = _struct_get(row, "xb15_yes_bid")     # parent 15m YES top-of-book
+        y15a = _struct_get(row, "xb15_yes_ask")
+        y15b_sz = _struct_get(row, "xb15_yes_bid_sz")
+        k15 = _struct_get(row, "xb15_k15")          # NaN until discovery captures it
+
+        vals = (y15b, y15a, y15b_sz, k15)
+        if any(v != v for v in vals) or k15 <= 0.0 or k5 <= 0.0:
+            d["decision"] = "skipped_xb_missing"; self._emit(d); return None
+        # Research sane-book filter on the 15m REFERENCE (build_xbook _sane_book):
+        # two-sided, in [0.01, 0.99], spread <= 0.15 — a collapsed book is not an
+        # opinion worth arbitraging against.
+        if not (0.01 <= y15b <= 0.99 and 0.01 <= y15a <= 0.99 and y15a > y15b
+                and (y15a - y15b) <= 0.15):
+            d["decision"] = "skipped_xb_unhealthy_15m"; self._emit(d); return None
+
+        gap_bps = (k5 - k15) / k15 * 1e4
+        # 5y leg fires ONLY on gap <= -g (K5 below K15 => own YES dominates).
+        if not (gap_bps <= -p.xb_gap_min_bps
+                and ya + p.xb_premium <= y15b
+                and y15b * y15b_sz >= p.xb_min_ref_usd):
+            self._emit(d); return None
+        if not (p.min_ask <= ya <= p.max_ask):      # research: ask > 0.03, <= ceil
+            self._emit(d); return None
+
+        side = "UP"                                 # always own YES
+        depth_shares = float(row["yes_ask_depth"])
+        if depth_shares * ya < p.fixed_bet_usd:     # not enough top-of-book USD
+            d["decision"] = "skipped_no_fill"; self._emit(d); return None
+
+        shares = p.fixed_bet_usd / ya
+        hour, dow = utc_hour_dow(ts)
+        ctx = {
+            "strategy_kind": "determinism", "symbol": symbol_of(self.slug),
+            "utc_hour": hour, "dow": dow, "entry_sec": sec, "time_left": time_left,
+            "dist_bps": round(abs(move) * 100.0, 2), "fav_side": side,
+            "entry_ask": round(ya, 4), "yes_mid": round(ymid, 4),
+            "spread_yes": round(float(row["spread_yes"]), 4),
+            "ask_depth_usd": round(depth_shares * ya, 1),
+            "spot_vel_10s_bps": round(self._roll.vel_bps(10), 2),
+            "spot_vel_30s_bps": round(self._roll.vel_bps(30), 2),
+            "rvol_60s_bps": round(self._roll.rvol_bps(60), 2),
+            "strike_crossings": self._crossings,
+            # xb5y decision features (post-hoc analysis / weekly review)
+            "xb_gap_bps": round(gap_bps, 2), "xb_edge": round(y15b - ya, 4),
+            "xb_k5": k5, "xb_k15": k15,
+            "xb15_yes_bid": round(y15b, 4), "xb15_yes_ask": round(y15a, 4),
+            "xb15_ref_usd": round(y15b * y15b_sz, 1),
+            "xb_s15": sec + 600,                    # seconds into the parent 15m window
+        }
+        self.pos = {"side": side, "entry": ya, "shares": shares,
+                    "bet": p.fixed_bet_usd,
+                    "fee_entry": _fee(shares, ya, p.fee_rate),
                     "ts": ts, "entry_sec": sec, "ctx": ctx}
         self.state = "HOLDING"
         portfolio.on_entry(ts)

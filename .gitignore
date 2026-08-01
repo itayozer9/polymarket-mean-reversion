@@ -20,3 +20,6 @@ data/research/
 
 # OS
 .DS_Store
+
+# Browser MCP session artifacts
+.playwright-mcp/

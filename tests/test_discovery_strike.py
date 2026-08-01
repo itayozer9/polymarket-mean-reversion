@@ -72,7 +72,7 @@ async def _noop_subscribe(asset_ids):
     pass
 
 
-async def _noop_close(market, end_price):
+async def _noop_close(market, end_price, chainlink_start=None, chainlink_end=None):
     pass
 
 
@@ -157,3 +157,110 @@ async def test_strike_frozen_once_captured(patched):
     await d._tick(session=None, symbols=["btc"])
     assert d.get_market(SLUG).start_price == 70000.0, "strike must stay frozen"
     assert len(patched["spot_calls"]) == 1, "spot must be sampled exactly once"
+
+
+@pytest.mark.asyncio
+async def test_chainlink_basis_threaded_through_close_with_correct_units(patched):
+    """REGRESSION: discovery must query the ChainlinkPriceCache (keyed in
+    MILLISECONDS) using window_start_ts/window_end_ts * 1000 (they are SECONDS).
+    If it passes raw seconds, price_asof always returns None and settlement
+    silently falls back to Coinbase. This asserts the numeric Chainlink open/close
+    reach on_close — i.e. the unit conversion is correct."""
+    from mean_reversion_live.collectors.chainlink_collector import ChainlinkPriceCache
+
+    cache = ChainlinkPriceCache()
+    # Oracle reads are recorded in MS (the poll loop uses time.time()*1000).
+    cache.record("btc", WINDOW_START * 1000, 70010.0)              # at the open boundary
+    cache.record("btc", (WINDOW_START + WINDOW_DUR) * 1000, 69990.0)  # at the close boundary
+
+    closes = []
+
+    async def capture_close(market, end_price, chainlink_start=None, chainlink_end=None):
+        closes.append((chainlink_start, chainlink_end))
+
+    d = MarketDiscovery(on_subscribe=_noop_subscribe, on_close=capture_close,
+                        chainlink_price_asof=cache.price_asof)
+
+    # Tick 1: window opens -> strike + chainlink_start captured.
+    patched["now"] = WINDOW_START
+    await d._tick(session=None, symbols=["btc"])
+
+    # Tick 2: past window_end -> close detected, on_close gets both chainlink prices.
+    patched["now"] = WINDOW_START + WINDOW_DUR + 1
+    await d._tick(session=None, symbols=["btc"])
+
+    assert closes, "on_close must fire when the window ends"
+    cl_start, cl_end = closes[-1]
+    assert cl_start == 70010.0, "chainlink_start must be the MS-keyed read at window open (not None)"
+    assert cl_end == 69990.0, "chainlink_end must be the MS-keyed read at window close (not None)"
+
+
+@pytest.mark.asyncio
+async def test_strike_captured_asof_window_open_not_live(patched):
+    """The look-ahead fix: when a spot_price_asof callback is wired, the strike
+    is the spot AT window_start_ts (the cache lookup), NOT the live spot at
+    poll time (~24s late). The live get_spot must NOT be called when as-of wins."""
+    asof_calls = []
+
+    def fake_spot_asof(symbol, t_ms):
+        asof_calls.append((symbol, t_ms))
+        return 70050.0                      # the TRUE open spot
+
+    d = MarketDiscovery(on_subscribe=_noop_subscribe, on_close=_noop_close,
+                        spot_price_asof=fake_spot_asof)
+    # poll lands 18s into the window; live spot has already drifted to 70200
+    patched["now"] = WINDOW_START + 18
+    patched["spot"] = 70200.0
+
+    await d._tick(session=None, symbols=["btc"])
+
+    m = d.get_market(SLUG)
+    assert m.start_price == 70050.0, "strike must be the as-of(open) value, not the late live spot"
+    assert asof_calls == [("btc", WINDOW_START * 1000)], "as-of queried in MS at window open"
+    assert patched["spot_calls"] == [], "live get_spot must NOT run when as-of succeeds"
+
+
+@pytest.mark.asyncio
+async def test_strike_falls_back_to_live_when_asof_missing(patched):
+    """If the cache has no sample at-or-before window open (fresh boot / feed gap),
+    as-of returns None and discovery falls back to the live get_spot — preserving
+    the legacy behaviour rather than recording a 0 strike."""
+    def fake_spot_asof(symbol, t_ms):
+        return None                         # no history yet
+
+    d = MarketDiscovery(on_subscribe=_noop_subscribe, on_close=_noop_close,
+                        spot_price_asof=fake_spot_asof)
+    patched["now"] = WINDOW_START + 5
+    patched["spot"] = 70123.45
+
+    await d._tick(session=None, symbols=["btc"])
+
+    m = d.get_market(SLUG)
+    assert m.start_price == 70123.45, "must fall back to live spot when as-of is None"
+    assert len(patched["spot_calls"]) == 1, "fallback path calls get_spot exactly once"
+
+
+@pytest.mark.asyncio
+async def test_ended_window_closes_exactly_once(patched):
+    """REGRESSION: Gamma keeps returning a window after it ends; discovery must
+    close+settle it EXACTLY ONCE, not re-close every poll (which spammed
+    market_closed with chainlink_start=None after the strike was popped, and burned
+    a Coinbase fetch per stale slug per poll). `fake_list_active_markets` always
+    returns the slug, simulating Gamma's persistent stale listing."""
+    closes = []
+
+    async def capture_close(market, end_price, chainlink_start=None, chainlink_end=None):
+        closes.append(market.slug)
+
+    d = MarketDiscovery(on_subscribe=_noop_subscribe, on_close=capture_close)
+
+    patched["now"] = WINDOW_START                       # open: capture strike
+    await d._tick(session=None, symbols=["btc"])
+    assert closes == []
+    # poll repeatedly AFTER the window ended — Gamma still lists the slug each time
+    for dt in (1, 31, 61, 91, 121):
+        patched["now"] = WINDOW_START + WINDOW_DUR + dt
+        await d._tick(session=None, symbols=["btc"])
+
+    assert closes == [SLUG], f"ended window must close exactly once, got {len(closes)}: {closes}"
+    assert SLUG in d._closed_slugs

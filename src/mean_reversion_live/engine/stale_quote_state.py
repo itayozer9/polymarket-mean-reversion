@@ -56,6 +56,11 @@ class StaleQuoteParams:
     fixed_bet_usd: float = 10.0
     fee_rate: float = 0.07
     max_daily_loss_usd: Optional[float] = None
+    daily_loss_mode: str = "soft_settled"  # soft_settled|hard_worstcase|hard_worstcase_latch
+    # v2 loss-avoidance filter (docs/research/loss_pattern_filters.md): skip
+    # mid-window trades when spot is already far from strike (near-certain
+    # outcome, the model's z-curve extrapolates into noise). No-op when None.
+    max_dist_bps: Optional[float] = None
 
 
 class StaleQuoteState:
@@ -96,7 +101,8 @@ class StaleQuoteState:
             d["decision"] = "skipped_unhealthy_book"; self._emit(d); return None
         if not portfolio.can_enter(ts):
             d["decision"] = "skipped_can_enter"; self._emit(d); return None
-        if self._guard is not None and self._guard.blocked(ts):
+        if self._guard is not None and self._guard.would_block(
+                ts, self.p.fixed_bet_usd * (1.0 + self.p.fee_rate)):
             d["decision"] = "skipped_daily_loss_cap"; self._emit(d); return None
 
         rvol = self._roll.rvol_bps(60)
@@ -109,6 +115,10 @@ class StaleQuoteState:
         amis = abs(mis)
         if not (self.p.margin <= amis <= self.p.max_mispricing and jump >= self.p.jump_bps):
             self._emit(d); return None
+        # v2 gate (no-op when None): skip far-from-strike near-certain outcomes.
+        if (self.p.max_dist_bps is not None
+                and abs(move) * 100.0 > self.p.max_dist_bps):
+            d["decision"] = "skipped_far_dist"; self._emit(d); return None
 
         buy_yes = mis > 0
         side = "UP" if buy_yes else "DOWN"
@@ -138,6 +148,8 @@ class StaleQuoteState:
                     "ts": ts, "entry_sec": sec, "ctx": ctx}
         self.state = "HOLDING"
         portfolio.on_entry(ts)
+        if self._guard is not None:
+            self._guard.on_entry(ts, self.slug, self.pos["bet"] + self.pos["fee_entry"])
         d["decision"] = "fired"; d["side_signal"] = side
         d["features"] = {"mispricing": ctx["mispricing"], "z": ctx["z"],
                          "jump_bps": ctx["spot_vel_10s_bps"], "entry_ask": ctx["entry_ask"]}
@@ -164,7 +176,7 @@ class StaleQuoteState:
                          "won": int(bool(won)), "pnl": round(pnl, 4)}
         portfolio.on_exit(trade)
         if self._guard is not None:
-            self._guard.record(ts_ms, pnl)
+            self._guard.on_settle(ts_ms, self.slug, pnl)
         self.pos = None
         self.state = "FLAT"
         self._traded = True

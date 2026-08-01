@@ -29,9 +29,50 @@ from mean_reversion_live.collectors.chainlink_collector import (  # noqa: E402
     CHAINLINK_DECIMALS,
     CHAINLINK_FEEDS,
     ChainlinkCsvGzAppender,
+    ChainlinkPriceCache,
+    _utc_date_str,
     chainlink_loop,
     decode_latest_round_data,
 )
+
+
+def _write_cl_gz(base: Path, fname: str, rows):
+    """Write a live_chainlink CSV.gz (rows = list of (ts_ms, symbol, price))."""
+    d = base / "live_chainlink"
+    d.mkdir(parents=True, exist_ok=True)
+    with gzip.open(d / fname, "wt") as fh:
+        fh.write(",".join(CHAINLINK_COLUMNS) + "\n")
+        for ts, sym, px in rows:
+            rec = {c: "" for c in CHAINLINK_COLUMNS}
+            rec["timestamp_ms"], rec["symbol"], rec["price"] = ts, sym, px
+            fh.write(",".join(str(rec[c]) for c in CHAINLINK_COLUMNS) + "\n")
+
+
+def test_warm_from_disk_seamless_restart(tmp_path):
+    """warm_from_disk pre-loads recent reads so price_asof works immediately after a
+    restart; excludes pre-cutoff (stale) reads and _hist backfills."""
+    now = 1_780_000_000_000
+    date = _utc_date_str(now)
+    # recent (within 40min default) + one beyond the keep horizon (excluded)
+    _write_cl_gz(tmp_path, f"btc_{date}.csv.gz",
+                 [(now - 30 * 60_000, "btc", 100.0),
+                  (now - 60_000, "btc", 101.0),
+                  (now - 2 * 3_600_000, "btc", 99.0)])  # 2h old -> excluded
+    # a _hist backfill with a (fake) recent ts MUST be ignored
+    _write_cl_gz(tmp_path, f"btc_hist_{date}.csv.gz", [(now - 10_000, "btc", 1.0)])
+
+    c = ChainlinkPriceCache()
+    n = c.warm_from_disk(tmp_path, now, symbols=["btc"])
+    assert n == 2                                   # 2 recent kept; 2h-old + hist excluded
+    assert c.price_asof("btc", now) == 101.0        # latest at-or-before now, within tolerance
+    # a window that "opened" 30min ago can be settled/gated immediately post-restart
+    assert c.price_asof("btc", now - 30 * 60_000) == 100.0
+    assert c.warm_from_disk(tmp_path, now, symbols=["eth"]) == 0   # symbol filter
+
+
+def test_warm_from_disk_no_dir_is_noop(tmp_path):
+    c = ChainlinkPriceCache()
+    assert c.warm_from_disk(tmp_path, 1_780_000_000_000, symbols=["btc"]) == 0
 
 
 def _read_gz_csv(path: Path):
@@ -178,3 +219,70 @@ async def test_chainlink_loop_live_smoke(tmp_path):
     # A real BTC/USD oracle read: price plausibly between $1k and $10M.
     assert 1_000 < float(rec["price"]) < 10_000_000
     assert int(rec["updated_at"]) > 1_700_000_000  # a sane recent epoch
+
+
+# ----- read_asof + updated_at plumbing (settlement-print psettle features) -------
+# cl_oracle_age_s = tick_s - updated_at of the round visible at the tick (research
+# convention, oracle_print_model.tick_feature_frame). The cache now carries
+# updated_at next to each poll; read_asof returns the SAME row price_asof does.
+
+def _write_cl_gz_upd(base: Path, fname: str, rows):
+    """live_chainlink CSV.gz writer with updated_at (rows = (ts_ms, sym, px, upd))."""
+    d = base / "live_chainlink"
+    d.mkdir(parents=True, exist_ok=True)
+    with gzip.open(d / fname, "wt") as fh:
+        fh.write(",".join(CHAINLINK_COLUMNS) + "\n")
+        for ts, sym, px, upd in rows:
+            rec = {c: "" for c in CHAINLINK_COLUMNS}
+            rec["timestamp_ms"], rec["symbol"], rec["price"] = ts, sym, px
+            rec["updated_at"] = "" if upd is None else upd
+            fh.write(",".join(str(rec[c]) for c in CHAINLINK_COLUMNS) + "\n")
+
+
+def test_read_asof_returns_price_and_updated_at():
+    c = ChainlinkPriceCache()
+    c.record("btc", 1_000_000, 100.0, updated_at=950)
+    c.record("btc", 1_030_000, 101.0, updated_at=995)
+    # asof between the two reads -> first row, with its round's updated_at
+    assert c.read_asof("btc", 1_020_000) == (100.0, 950.0)
+    assert c.read_asof("btc", 1_030_000) == (101.0, 995.0)
+    # price_asof must return the SAME row's price (it delegates to read_asof)
+    assert c.price_asof("btc", 1_020_000) == 100.0
+    # before the first read / beyond tolerance -> None (unchanged semantics)
+    assert c.read_asof("btc", 999_999) is None
+    assert c.read_asof("btc", 1_030_000 + 120_001) is None
+    # a record without updated_at -> (price, None): age is MISSING, not 0 (fail-closed)
+    c.record("eth", 2_000_000, 5.0)
+    assert c.read_asof("eth", 2_000_000) == (5.0, None)
+
+
+def test_read_asof_out_of_order_insert_keeps_upd_aligned():
+    c = ChainlinkPriceCache()
+    c.record("btc", 1_000_000, 100.0, updated_at=900)
+    c.record("btc", 1_060_000, 103.0, updated_at=1_050)
+    c.record("btc", 1_030_000, 101.5, updated_at=1_000)   # late/out-of-order
+    assert c.read_asof("btc", 1_030_000) == (101.5, 1_000.0)
+    assert c.read_asof("btc", 1_059_000) == (101.5, 1_000.0)
+    assert c.read_asof("btc", 1_060_000) == (103.0, 1_050.0)
+    # eviction trims all three parallel arrays in lockstep
+    c2 = ChainlinkPriceCache(max_keep_ms=50_000)
+    c2.record("btc", 1_000_000, 100.0, updated_at=900)
+    c2.record("btc", 1_100_000, 110.0, updated_at=1_090)
+    assert c2.read_asof("btc", 1_000_000) is None          # evicted
+    assert c2.read_asof("btc", 1_100_000) == (110.0, 1_090.0)
+
+
+def test_warm_from_disk_loads_updated_at(tmp_path):
+    now = 1_780_000_000_000
+    date = _utc_date_str(now)
+    _write_cl_gz_upd(tmp_path, f"btc_{date}.csv.gz",
+                     [(now - 120_000, "btc", 100.0, now // 1000 - 130),
+                      (now - 60_000, "btc", 101.0, now // 1000 - 70),
+                      (now - 30_000, "btc", 102.0, None)])   # row missing updated_at
+    c = ChainlinkPriceCache()
+    assert c.warm_from_disk(tmp_path, now, symbols=["btc"]) == 3
+    assert c.read_asof("btc", now - 60_000) == (101.0, float(now // 1000 - 70))
+    # the asof row lacking updated_at surfaces None (caller fails closed on age)
+    assert c.read_asof("btc", now) == (102.0, None)
+    # price path is unchanged by the new column
+    assert c.price_asof("btc", now) == 102.0

@@ -66,7 +66,9 @@ def test_parse_ticker_msg_rejects_non_ticker():
 
 
 def test_parse_ticker_msg_rejects_unknown_product():
-    assert parse_ticker_msg({"type": "ticker", "product_id": "DOGE-USD"}) is None
+    # NOTE: DOGE-USD became a REAL collected product in the 2026-07-17 capacity
+    # expansion (bnb/doge/hype) — use a symbol we genuinely never collect.
+    assert parse_ticker_msg({"type": "ticker", "product_id": "SHIB-USD"}) is None
 
 
 def test_parse_ticker_msg_handles_missing_numeric():
