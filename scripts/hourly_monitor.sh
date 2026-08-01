@@ -6,6 +6,7 @@
 #
 #   crontab:  37 * * * *  /Users/itayozer/dev/polymarket-mean-reversion/scripts/hourly_monitor.sh
 set -uo pipefail
+export PATH="$HOME/.local/bin:$PATH"  # cron's PATH lacks uv
 cd "$(dirname "$0")/.." || exit 1
 REPO="$(pwd)"
 LOG="$REPO/logs/hourly_monitor.log"
@@ -18,7 +19,10 @@ uv run python -m mean_reversion_live.scripts.status || echo "[warn] status faile
 
 # 2) Auto-claim WON live positions — idempotent, eth_call-sim-gated, gas-capped,
 #    and filtered to THIS probe's crypto-15m wins only (shared-wallet safe).
-uv run --python 3.11 --no-project --with web3 --with eth-account --with eth-abi \
+uv run --python 3.11 --no-project \
+  --with py-builder-relayer-client --with poly-eip712-structs --with py-builder-signing-sdk \
+  --with py-clob-client-v2 \
+  --with web3 --with eth-account --with eth-abi \
   --with requests --with structlog --with python-dotenv \
   scripts/live_claim.py --execute || echo "[warn] claim failed"
 
