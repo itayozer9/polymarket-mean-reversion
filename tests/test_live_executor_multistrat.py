@@ -22,6 +22,20 @@ sys.path.insert(0, str(REPO / "scripts"))
 import live_executor as le  # noqa: E402
 
 
+def _shipped_default(name, cast):
+    """The os.getenv fallback literal for `name`, read from the executor's source.
+
+    The module runs load_dotenv() at import, so its live constants carry whatever the
+    deployment currently arms. Tests that pin "ships unarmed" must therefore assert the
+    SHIPPED fallback, not the ambient value — otherwise arming a knob in .env (a normal,
+    signed-off act) turns the suite permanently red."""
+    import re
+    src = (REPO / "scripts" / "live_executor.py").read_text()
+    m = re.search(rf'os\.getenv\(\s*"{name}"\s*,\s*"([^"]*)"\s*\)', src)
+    assert m, f"no os.getenv fallback found for {name} — did the constant get renamed?"
+    return cast(m.group(1))
+
+
 def _slug(symbol="btc"):
     """A 15m slug whose window ends ~25min out, so the `time_left` gate always passes."""
     ws = int(time.time()) + 600          # window_end = ws + 900 = now + 1500s
@@ -681,9 +695,15 @@ async def test_dry_retry_n_gives_the_book_more_looks(tmp_path, monkeypatch):
 
 
 async def test_dry_retry_default_is_one_look(tmp_path, monkeypatch):
-    """Regression pin: the shipped default (N=1) is the ORIGINAL single re-check."""
+    """Regression pin: the shipped default (N=1) is the ORIGINAL single re-check.
+
+    Asserted against the module CONSTANT's fallback, not `le.EXEC_DRY_RETRY_N` — the module
+    calls load_dotenv() at import, so the live value reflects whatever .env currently arms
+    (N=3 since 2026-07-25). Pinning the ambient value made this test permanently red, which
+    is worse than useless: a red suite hides the next real regression."""
     monkeypatch.setattr(le, "gamma_tokens", lambda slug: ("UPTOK", "DOWNTOK"))
     monkeypatch.setattr(le, "EXEC_DRY_RETRY_S", 0.01)
+    monkeypatch.setattr(le, "EXEC_DRY_RETRY_N", _shipped_default("EXEC_DRY_RETRY_N", int))
     assert le.EXEC_DRY_RETRY_N == 1, "default must stay 1 so deploys are opt-in"
     thin = _book_dict([(0.72, 1)])
     clob = _FakeClob2(_agg(0.0, 0.0, "n/a"), books=[thin, thin, _book_dict([(0.72, 50)])])
@@ -715,8 +735,125 @@ async def test_symbols_extra_grants_a_coin_to_one_strategy_only(tmp_path, monkey
 def test_symbols_extra_defaults_empty_and_parses_pairs():
     """Empty default => byte-identical to the global-only behaviour (ships unarmed).
     Malformed entries drop silently: a typo must never widen the allowlist or crash the
-    executor at import (it respawns from cron — an import error is a silent outage)."""
-    assert le.EXEC_SYMBOLS_EXTRA == {}, "must ship UNARMED; arming is a separate signed-off step"
+    executor at import (it respawns from cron — an import error is a silent outage).
+
+    Checked against the shipped fallback rather than the live `le.EXEC_SYMBOLS_EXTRA`, which
+    reflects .env (fav_disagree_hi_live:hype since 2026-07-26). The safety property is that
+    an ABSENT or malformed setting never widens the allowlist."""
+    assert le._parse_sid_symbols(_shipped_default("EXEC_SYMBOLS_EXTRA", str)) == {}, \
+        "must ship UNARMED; arming is a separate signed-off step"
     assert le._parse_sid_symbols("") == {}
     assert le._parse_sid_symbols("a:hype, b:hype , b:DOGE ,junk,,c:") == {
         "a": {"hype"}, "b": {"hype", "doge"}}                    # junk and "c:" dropped
+
+
+# --- preflight verdict split: above_band vs dry (2026-08-03) --------------------------------
+
+async def test_above_band_is_labelled_but_still_retries_like_dry(tmp_path, monkeypatch):
+    """A book priced ABOVE our ceiling is not an empty book. Both still get the delayed
+    re-checks (waiting for the reprice INTO the band is the bet), but they must be tellable
+    apart in the ledger — sharing the `dry` label already cost us one misdiagnosis."""
+    monkeypatch.setattr(le, "gamma_tokens", lambda slug: ("UPTOK", "DOWNTOK"))
+    monkeypatch.setattr(le, "EXEC_DRY_RETRY_S", 0.01)
+    monkeypatch.setattr(le, "EXEC_DRY_RETRY_N", 2)
+    above = _book_dict([(0.59, 50)])          # deep book, but the touch clears the 0.45 ceiling
+    clob = _FakeClob2(_agg(0.0, 0.0, "n/a"), books=[above, above, above])
+    fp = tmp_path / "fills.jsonl"
+    ex = le.Executor(clob=clob, mode="live", state_path=tmp_path / "s.json",
+                     fills_path=fp, guards="on")
+    await ex.handle(_full_intent("fav_disagree_hi_live", _slug(), entry_ask=0.42,
+                                 bet=10.0, max_ask=0.45))
+    assert clob.book_calls == 3, "above_band must get the SAME re-checks a dry book gets"
+    assert clob.chase_calls == [], "never send an order while the touch is above the ceiling"
+    rec = _read_fills(fp)[0]
+    assert rec["ok"] is False
+    assert rec["guard"]["verdict"] == "above_band"      # not "dry" — the whole point
+    assert rec["note"] == "guard:above_band_after_retry"
+    assert rec["guard"]["best_ask"] == 0.59             # healthy book, just out of band
+
+
+async def test_thin_in_band_book_is_still_dry(tmp_path, monkeypatch):
+    """Regression pin for the other side of the split: a genuinely thin book in-band keeps
+    the `dry` label, so the historical `guard:dry_after_retry` series stays comparable."""
+    monkeypatch.setattr(le, "gamma_tokens", lambda slug: ("UPTOK", "DOWNTOK"))
+    monkeypatch.setattr(le, "EXEC_DRY_RETRY_S", 0.01)
+    thin = _book_dict([(0.72, 1)])            # in band (ceiling 0.88) but 1 share
+    clob = _FakeClob2(_agg(0.0, 0.0, "n/a"), books=[thin, thin])
+    fp = tmp_path / "fills.jsonl"
+    ex = le.Executor(clob=clob, mode="live", state_path=tmp_path / "s.json",
+                     fills_path=fp, guards="on")
+    await ex.handle(_full_intent("det_lwd_live", _slug(), entry_ask=0.70, max_ask=0.88))
+    rec = _read_fills(fp)[0]
+    assert rec["guard"]["verdict"] == "dry"
+    assert rec["note"] == "guard:dry_after_retry"
+
+
+# --- C1: a restart must REPLAY the intent backlog, not silently discard it (2026-08-03) -----
+
+async def test_restart_replays_backlog_instead_of_starting_at_eof(tmp_path, monkeypatch):
+    """The executor used to start reading at EOF, so every restart threw away whatever was
+    already queued — no log line, no fill record, no counter, invisible everywhere. The
+    hourly cron is its only supervisor, so an unnoticed crash could drop an hour of intents.
+    Replay is safe because the normal gates reject stale lines for free."""
+    intents = tmp_path / "intents.jsonl"
+    backlog = [_full_intent("det_lwd_live", _slug("btc")),
+               _full_intent("fav_disagree_live", _slug("eth"))]
+    intents.write_text("".join(json.dumps(i) + "\n" for i in backlog))
+    monkeypatch.setattr(le, "INTENTS", intents)
+    monkeypatch.setattr(le, "LIVE_DIR", tmp_path)
+
+    seen = []
+
+    class _SpyExecutor:                       # records what the loop feeds it
+        guards, enforce_sids, burst_cap, burst_cap_sids, books = "on", set(), 1, set(), {}
+        mode = "dry_run"
+        async def handle(self, intent):
+            seen.append(intent["slug"])
+        def settle_pending(self):
+            pass
+
+    monkeypatch.setattr(le, "Executor", lambda *a, **kw: _SpyExecutor())
+    calls = {"n": 0}
+
+    def _kill_after_one_pass(mode):           # let exactly one pass run, then halt
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    monkeypatch.setattr(le, "_killed", _kill_after_one_pass)
+    await le.run_loop("dry_run")
+    assert seen == [i["slug"] for i in backlog], "backlogged intents must be replayed"
+
+
+async def test_backlog_replay_skips_provably_stale_lines_regardless_of_guards(tmp_path, monkeypatch):
+    """The replay must not depend on EXEC_GUARDS=on to stay safe. A line older than the
+    staleness bound is dropped at boot by timestamp; a fresh one is replayed; a legacy line
+    with no ts_ms fails OPEN (the remaining gates reject it for free). Both counts logged."""
+    intents = tmp_path / "intents.jsonl"
+    now_ms = time.time() * 1000
+    old = {**_full_intent("det_lwd_live", _slug("btc")), "ts_ms": now_ms - 600_000}   # 10 min
+    fresh = {**_full_intent("det_lwd_live", _slug("eth")), "ts_ms": now_ms - 1_000}   # 1 s
+    intents.write_text("".join(json.dumps(i) + "\n" for i in (old, fresh)))
+    monkeypatch.setattr(le, "INTENTS", intents)
+    monkeypatch.setattr(le, "LIVE_DIR", tmp_path)
+
+    seen = []
+
+    class _SpyExecutor:
+        guards, enforce_sids, burst_cap, burst_cap_sids, books = "off", set(), 1, set(), {}
+        mode = "dry_run"
+        async def handle(self, intent):
+            seen.append(intent["slug"])
+        def settle_pending(self):
+            pass
+
+    monkeypatch.setattr(le, "Executor", lambda *a, **kw: _SpyExecutor())
+    calls = {"n": 0}
+
+    def _kill_after_one_pass(mode):
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    monkeypatch.setattr(le, "_killed", _kill_after_one_pass)
+    await le.run_loop("dry_run")
+    # guards are OFF here: the 10-minute-old line must still never reach handle()
+    assert seen == [fresh["slug"]], "stale backlog line must be dropped at boot, not handled"

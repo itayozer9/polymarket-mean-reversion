@@ -366,14 +366,24 @@ for sid_dir in sorted(root.iterdir()):
 EOF
 ```
 
-### 5. Compute total / daily / monthly PnL — overall AND per-strategy ($ and %)
+### 5. Compute total / daily / monthly PnL — per-strategy, on OFFICIAL on-chain labels
 
-`etimes` is Linux-only — on macOS BSD `ps`, parse `etime` (`[DD-]HH:MM:SS` / `MM:SS`).
-Capital base for `%`: prefer portfolio `starting_cash`; if absent, fall back to $100/strategy.
+**Source of truth: `data/research/paper_official/daily_scores.parquet`, NOT the portfolio
+JSONs / `trades.jsonl`.** The paper engine settles on its own reconstructed-Chainlink read,
+which disagrees with real on-chain settlement on ~17.6% of identical markets and errs in our
+favour 2.4:1 — the engine tape runs **~3x hot** (2026-08-03 audit: 7d engine +$1,568 vs
+official −$242 on the SAME trades; `det_lwd_v1_capped` is a 201x inflation ratio). Never lead
+with engine dollars. The parquet carries `pnl_official` AND `pnl_engine` per sid per day, so
+both are shown and the gap stays visible instead of hidden.
+
+Rows are the **virgin era (entry >= 2026-06-19)** — never revealed to any sweep, and it
+excludes the degraded 06-05..06-12 window (`research/analysis/resettle_official.py:35-42`).
+Pending-label trades are excluded upstream, never imputed (`resettle_official.py:122`).
 
 ```bash
-cd /Users/itayozer/dev/polymarket-mean-reversion && python3 <<'EOF'
-import json, pathlib, subprocess
+cd /Users/itayozer/dev/polymarket-mean-reversion && uv run python <<'EOF'
+import json, pathlib, subprocess, datetime as dt
+import pandas as pd
 
 def parse_etime(s: str) -> int:
     # BSD: "MM:SS" | "HH:MM:SS" | "DD-HH:MM:SS"
@@ -391,96 +401,69 @@ def parse_etime(s: str) -> int:
         return 0
     return days * 86400 + h * 3600 + m * 60 + sec
 
-import time
 PID = pathlib.Path(".combined.pid").read_text().strip() if pathlib.Path(".combined.pid").exists() else ""
-proc_elapsed_s = None   # process runtime — for the RUNTIME line only, NOT for daily$
+proc_elapsed_s = None   # process runtime — for the RUNTIME line only, NEVER for daily$
 if PID:
     try:
-        et = subprocess.check_output(["ps","-p",PID,"-o","etime="]).decode()
-        proc_elapsed_s = parse_etime(et)
+        proc_elapsed_s = parse_etime(subprocess.check_output(["ps","-p",PID,"-o","etime="]).decode())
     except Exception:
         pass
 
-# daily$ is computed from each strategy's TRADE-HISTORY SPAN (first settled trade -> now),
-# NOT process runtime. This is RESTART-IMMUNE: portfolio totals are lifetime and survive a
-# restart, but process etime resets to ~0 on restart, which used to inflate daily$ to nonsense
-# (e.g. $2k lifetime / 20-min runtime => $125k/day). Span comes from the durable trade logs.
-now_ms = time.time() * 1000.0
-
-def first_trade_ms(sid):
-    f = pathlib.Path("data/jsonl")/sid/"trades.jsonl"
-    if not f.exists():
-        return None
-    for L in f.read_text().splitlines():
-        if L.strip():
-            r = json.loads(L)
-            return r.get("exit_ts_ms") or r.get("entry_ts_ms")
-    return None
-
-DEFAULT_BASE = 1000.0  # paper-trader per-strategy seed (starting_capital_usd)
-# Only report ENABLED strategies. Disabled strategies' stale portfolio JSONs stay
-# on disk (26 of them since the 2026-05-29 cutover) but MUST NOT clutter the live
-# report. Enabled set = the running engine's heartbeat keys (no yaml dep under python3).
-_enabled = set()
+VIRGIN = "2026-06-19"                       # official-label era boundary
+P = pathlib.Path("data/research/paper_official/daily_scores.parquet")
+age_h = (dt.datetime.now().timestamp() - P.stat().st_mtime) / 3600
+df = pd.read_parquet(P)
+df = df[df["utc_date"] >= VIRGIN]
+# Only ENABLED strategies (heartbeat keys = what the running engine actually loaded).
 try:
-    _enabled = set(json.load(open("data/state/last_tick.json")).get("strategy_pnl", {}))
+    enabled = set(json.load(open("data/state/last_tick.json")).get("strategy_pnl", {}))
+    if enabled:
+        df = df[df["strategy_id"].isin(enabled)]
 except Exception:
     pass
-total_pnl = 0.0
-total_base = 0.0
-rows = []
-oldest_ms = None
-for f in sorted(pathlib.Path("data/portfolios").glob("*.json")):
-    sid = f.stem
-    if _enabled and sid not in _enabled:
-        continue  # skip disabled/retired strategies
-    p = json.loads(f.read_text())
-    pnl = float(p.get("total_pnl", 0.0))
-    base = float(p.get("starting_cash") or p.get("starting_capital") or DEFAULT_BASE)
-    ft = first_trade_ms(sid)
-    span_s = (now_ms - ft) / 1000.0 if ft else None
-    if ft and (oldest_ms is None or ft < oldest_ms):
-        oldest_ms = ft
-    total_pnl += pnl
-    total_base += base
-    rows.append((sid, pnl, base, int(p.get("n_trades", 0) or len(p.get("trades", []))), span_s))
 
-def rate(pnl, span_s, horizon_s):
-    if not span_s or span_s <= 0:
-        return None
-    return pnl * horizon_s / span_s
+now = pd.Timestamp.now(tz="UTC")
+def span_days(first):    # span-based, restart-immune (same convention as the live table)
+    return max((now - pd.Timestamp(first, tz="UTC")).total_seconds() / 86400.0, 1e-9)
 
-total_span_s = (now_ms - oldest_ms) / 1000.0 if oldest_ms else None
-runtime_str = f"{proc_elapsed_s}s" if proc_elapsed_s else "n/a"
-print(f"TOTAL  pnl=${total_pnl:+.2f}  base=${total_base:.2f}  total_pct={total_pnl/total_base*100:+.2f}%")
-print(f"TOTAL  proc_runtime={runtime_str}  data_span_days={ (total_span_s/86400) if total_span_s else 0 :.2f}")
-if total_span_s:
-    print(f"TOTAL  daily=${rate(total_pnl,total_span_s,86400):+.2f}  monthly_forecast=${rate(total_pnl,total_span_s,86400*30):+.2f}  (span-based, restart-immune)")
+g = (df.groupby("strategy_id")
+       .agg(n=("n","sum"), off=("pnl_official","sum"), eng=("pnl_engine","sum"),
+            wins=("wins","sum"), first=("utc_date","min"))
+       .sort_values("off", ascending=False))
 
+print(f"labels refreshed {age_h:.1f}h ago"
+      f"{'  ⚠️ STALE — run ./scripts/nightly_honest.sh' if age_h > 26 else ''}")
+print(f"OFFICIAL-settled, virgin era (>= {VIRGIN}). engine$ shown only to expose the inflation.")
 print()
-print(f"{'strategy':32}  {'trades':>6}  {'total$':>10}  {'daily$':>10}  {'month$':>10}  {'span_d':>7}")
-for sid, pnl, base, n, span_s in rows:
-    d_usd = rate(pnl, span_s, 86400)
-    m_usd = rate(pnl, span_s, 86400 * 30)
-    if d_usd is None:
-        print(f"{sid:32}  {n:>6}  {pnl:>+10.2f}  {'-':>10}  {'-':>10}  {'-':>7}")
-    else:
-        print(f"{sid:32}  {n:>6}  {pnl:>+10.2f}  {d_usd:>+10.2f}  {m_usd:>+10.2f}  {span_s/86400:>7.2f}")
+print(f"{'strategy':26}{'tr':>5}{'total$':>10}{'daily$':>9}{'month$':>10}{'WR':>6}"
+      f"{'engine$':>10}{'infl':>7}{'span_d':>8}")
+for sid, r in g.iterrows():
+    sd = span_days(r["first"])
+    infl = (r["eng"] / r["off"]) if abs(r["off"]) > 1e-9 else float("nan")
+    print(f"{sid[:26]:26}{int(r['n']):>5}{r['off']:>+10.2f}{r['off']/sd:>+9.2f}"
+          f"{r['off']*30/sd:>+10.2f}{r['wins']/r['n']*100:>5.0f}%{r['eng']:>+10.2f}"
+          f"{infl:>7.1f}{sd:>8.2f}")
+tn, toff, teng = int(g["n"].sum()), g["off"].sum(), g["eng"].sum()
+tsd = span_days(df["utc_date"].min())
+print(f"{'>>> TOTAL':26}{tn:>5}{toff:>+10.2f}{toff/tsd:>+9.2f}{toff*30/tsd:>+10.2f}"
+      f"{'':>6}{teng:>+10.2f}{(teng/toff if abs(toff)>1e-9 else float('nan')):>7.1f}{tsd:>8.2f}")
+print(f"proc_runtime={proc_elapsed_s or 'n/a'}s  (health line only — NOT the daily$ basis)")
 EOF
 ```
 
 Notes:
-- **`daily$` is now SPAN-based (restart-immune), not process-runtime based.** It divides each
-  strategy's lifetime `total_pnl` by the elapsed time since its FIRST settled trade (`data_span_days`),
-  read from the durable `data/jsonl/<sid>/trades.jsonl`. This is correct across restarts — a fresh
-  `run_combined` resets process etime to ~0, but the portfolios + trade logs are continuous, so the
-  span keeps measuring the true accumulation window (~since the 06-05 strategy cutover).
-- `proc_runtime` is reported SEPARATELY (for the health/"Runtime" line only) — do NOT use it for daily$.
-- Monthly forecast = `daily_rate × 30`. Linear extrapolation, not seasonal — caveat it.
-- `%`-of-capital columns were dropped (meaningless for fixed-$/trade strategies; only ~$10×concurrent
+- **Report the `total$` / `daily$` / `month$` columns (official) as THE paper numbers.** Mention
+  `engine$` / `infl` only as a one-line caveat ("engine tape reads $X, ~Nx inflated") — never as
+  the headline. If a strategy's `infl` is wild (>5x), say so: it means its engine P&L is nearly
+  all mislabeling (`det_lwd_v1` is ∞ — engine +$1,446, official −$13).
+- **`daily$` is SPAN-based** = `official_total × 86400 / (now − first virgin-era trade day)`.
+  Restart-immune: a fresh `run_combined` resets process etime to ~0, but the parquet is durable.
+- Monthly forecast = `daily × 30`. Linear extrapolation, not seasonal — caveat it.
+- **Freshness matters.** Labels come from the nightly (`scripts/nightly_honest.sh`, launchd
+  ~03:15Z). Today's trades have NO official label until it next runs, so today is under-counted
+  in this table by design — use §5b for today. On a gate morning, run the nightly by hand first.
+- `%`-of-capital columns are gone (meaningless for fixed-$/trade strategies; only ~$10×concurrent
   is ever deployed). Report **total$, daily$, WR, today$** instead.
-- If `data_span_days` < 1 still surface daily$ but caveat "young sample"; it's only noise when the span
-  itself is tiny, which (unlike process runtime) does NOT happen on a restart.
 
 ### 5b. TODAY'S CHANGE (per-strategy + total) + daily-cap status + condition slice
 
@@ -517,7 +500,8 @@ def won_of(r): return r.get("won", 1 if r.get("pnl", 0) > 0 else 0)
 def ts_of(r):  return r.get("exit_ts_ms") or r.get("entry_ts_ms", 0)
 
 allr, tot_pnl, tot_n = [], 0.0, 0
-print(f"TODAY'S CHANGE (since {il_midnight:%Y-%m-%d 00:00} IDT/IST):")
+print(f"TODAY'S CHANGE (since {il_midnight:%Y-%m-%d 00:00} IDT/IST)"
+      f"  [ENGINE-settled — today has no official labels yet; runs ~3x hot]:")
 for sid in sorted(enabled):
     f = pathlib.Path("data/jsonl")/sid/"trades_detailed.jsonl"
     if not f.exists(): f = pathlib.Path("data/jsonl")/sid/"trades.jsonl"
@@ -545,6 +529,11 @@ EOF
 ```
 
 Notes:
+- **This table is ENGINE-settled and there is no honest alternative intraday** — official
+  on-chain labels for today's windows only land when the nightly runs (`scripts/nightly_honest.sh`,
+  ~03:15Z). The engine tape reads ~3x hot in aggregate (per §5), so **always label table ① as
+  "engine-settled (~3x hot)"** and never quote today's dollars as a realized result. If the user
+  wants an honest today figure, run the nightly by hand first, then re-read §5.
 - **Surface the TOTAL today's-change line and per-strategy today columns prominently** in the response (header row + a `today $` column in the per-strategy table).
 - "Today" is Israel-local; a trade counts toward today when it **settled** today. Early after IDT midnight the numbers reset — that's expected, not a fault.
 - The `_capped` variant matches its uncapped twin until a **UTC** day's loss reaches −$50, then stops entering. The cap flag is UTC-based by design.
@@ -623,8 +612,11 @@ paper trading"). NEVER collapse the paper tables into inline bullet lists to sav
     realized P&L (data-api), incl. the Δ(book−truth) divergence verdict. THEN the per-strategy
     table from §2b: balance, **total$**, **daily$** (span-based), today$, trades, cap-left,
     bank-left — for every live strategy (`det_lwd_live`, `det_d12_wide_live`).
-  - **① Paper — Today's change** — the per-strategy IDT table (today tr, today$, WR) + TOTAL row.
-  - **② Paper — All-time** — the per-strategy table (trades, **total$**, WR, **daily$** [span-based, §5]) + TOTAL row.
+  - **① Paper — Today's change (engine-settled, ~3x hot)** — the per-strategy IDT table
+    (today tr, today$, WR) + TOTAL row. MUST carry the engine-settled label (§5b).
+  - **② Paper — All-time (OFFICIAL on-chain labels)** — the per-strategy table (trades,
+    **total$**, WR, **daily$** [span-based, §5]) + TOTAL row. These are the honest dollars;
+    add ONE caveat line giving the engine total + inflation ratio, never the reverse.
 
 Every table carries BOTH a `total$` and a `daily$` view (daily$ = span-based, restart-immune) so
 live and paper are reported symmetrically. The TOTAL row is mandatory on each.
@@ -669,7 +661,8 @@ Target structure (the user prefers detail over brevity):
 **PAPER (forward test) — per-strategy, split into TWO tables. Both carry a TOTAL row. Strategy
 descriptions go in the short list below, NOT as a table column.**
 
-**① Today's change** (Israel-local day, by settlement — the headline the user asked for):
+**① Today's change** (Israel-local day, by settlement — the headline the user asked for).
+⚠️ **Engine-settled, ~3x hot** — official labels for today arrive with the next nightly:
 
 | strategy_id | today tr | today $ | today WR | cap |
 |---|--:|--:|--:|---|
@@ -681,7 +674,8 @@ descriptions go in the short list below, NOT as a table column.**
 | `det_sqp_v1_capped` | n | $±X | X% | ⚠ if UTC −50 hit |
 | **TOTAL** | **N** | **$±X** | — | |
 
-**② All-time** (since each strategy's start; v2s backfilled to v1's 05-30 live-start):
+**② All-time — OFFICIAL on-chain labels**, virgin era (entry >= 2026-06-19), from §5.
+These are the honest dollars; the engine tape is ~3x higher and belongs in the caveat only:
 
 | strategy_id | trades | total $ | WR | daily $ |
 |---|--:|--:|--:|--:|
@@ -771,6 +765,13 @@ AVOID in the diary:
 - Hour-by-hour transcription of which strategy made which dollar amount
 - Generic "bot healthy, all running" — that's implicit if an entry exists
 - Trade-by-trade callouts unless the trade is a *pattern instance*
+- **Quoting an engine-settled paper dollar as a result.** Every paper P&L claim in the diary
+  must cite the OFFICIAL number (§5 / `score_gates` / `daily_scores.parquet`). The engine tape
+  may appear only when explicitly labelled ("engine +$1,568, official −$242 — 3x inflation").
+  A diary full of engine dollars is how a −$242 week gets remembered as a +$1,568 one.
+- **Un-caveated hype numbers.** hype has no Chainlink feed, so the paper engine settles it via
+  `coinbase_fallback` at ~2x inflation; it was 44% of paper P&L since 07-17. On a hype-heavy
+  day, say so.
 
 Before writing, glance at `tail -50 data/diary.md` to see the most recent entries — patterns and recurrence are the point.
 

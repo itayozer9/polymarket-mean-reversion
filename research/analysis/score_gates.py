@@ -99,6 +99,12 @@ def load_fills() -> pd.DataFrame:
             except json.JSONDecodeError:
                 continue  # torn tail line
     df = pd.DataFrame(rows)
+    # Drop smoke-test records. 16 synthetic rows sit in the real ledger (token_id "UPTOK",
+    # 2026-06-08) and 3 of them carry a REAL sid (det_d12_wide_live) with ok=true/dry_run=false,
+    # so they pass every sid filter. Every registered gate window starts 07-03+, so no gate was
+    # ever affected — but any lifetime read without --since would score fake fills as real.
+    if "token_id" in df.columns:
+        df = df[df["token_id"] != "UPTOK"].reset_index(drop=True)
     df["ts_ms"] = (df["ts"] * 1000).astype("int64")
     return df
 
@@ -115,6 +121,12 @@ def score_live(args) -> dict:
         m &= df["ts_ms"] >= _ts_ms(args.since)
     if args.until:
         m &= df["ts_ms"] < _ts_ms(args.until)
+    if getattr(args, "symbol", None):
+        # fills.jsonl has no symbol column; the slug carries it ("hype-updown-15m-<ts>").
+        # Needed by the 08-07 hype fill-rate calibration, which is a per-symbol FILL-RATE
+        # read on the live ledger, not an EV slice.
+        syms = tuple(s.strip().lower() + "-" for s in args.symbol.split(","))
+        m &= df["slug"].str.lower().str.startswith(syms)
     d = df[m]
     attempts = len(d)
     fills = d[d["ok"] & (d["filled_shares"] > 0)].copy()
@@ -176,6 +188,7 @@ def main(argv=None):
     pp = sub.add_parser("paper", help="paper_official parquet slice")
     pp.add_argument("--sids", required=True, help="comma-separated strategy ids to pool")
     pp.add_argument("--minus-sids", help="drop slugs these sids traded in the same window")
+    pl.add_argument("--symbol", help="comma-separated symbols, e.g. hype (matched on the slug)")
     pp.add_argument("--symbol", help="comma-separated symbols, e.g. hype")
     pp.add_argument("--ask-band", help="lo,hi inclusive on entry_ask, e.g. 0.30,0.45")
     pp.add_argument("--hours", help="comma-separated UTC hours, e.g. 16,17,18,19")

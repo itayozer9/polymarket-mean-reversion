@@ -4,6 +4,180 @@
 
 ---
 
+## 2026-08-03 - FULL AUDIT + HONEST DASHBOARDS + BUNDLE A (C1/C6/C4-lite/C7); 08-03 gate scored
+
+Three parallel audits (research history, live execution machinery, empirical results), then a
+user-approved plan implemented end to end. **The headline finding is a measurement defect, not
+a trading one.**
+
+### THE BIG ONE: the paper dashboard was ~3x inflated, AFTER the 06-19 "honest settlement" fix
+
+The 06-19 fix re-scored RESEARCH on official on-chain labels, but every human-facing surface
+(status §5/§5b, the diary, the hourly monitor) kept reading the ENGINE tape. Re-measured:
+the engine's reconstructed-Chainlink resolution disagrees with real money settlement on
+**17.6% of identical markets, biased 2.4:1 in our favour** (40 paper-win/live-loss vs 17 the
+other way, binomial p~0.002 — an asymmetry that size is correlated with the side we bet, i.e.
+residual boundary-snapshot bias, not oracle noise). Uniform across distance-to-strike
+quartiles, stable every week W24..W31.
+
+Consequences, all now surfaced rather than hidden:
+- Paper post-06-19: engine **+$13,863** vs official **+$4,595** = **3.0x**.
+- Last 7d: engine **+$1,568** vs official **-$242**. The week the dashboard called good was bad.
+- `det_lwd_v1` engine +$1,446 / official **-$13**; `det_lwd_v1_capped` **201x**; `fav_lowvol` 5.4x.
+- Only TWO strategies are genuinely positive on official 30d data with CI-lo>0:
+  **fav_disagree** (+$1.31/fill) and **xb_5m15m_causal_v1** (+$1.08/fill, and accelerating:
+  14d +1.29, 7d +1.42, n=401, never armed).
+- hype has no Chainlink feed so it settles via `coinbase_fallback` (~2x inflation) and is 44%
+  of paper P&L since 07-17 — the 07-17 capacity expansion partly re-opened the same hole.
+
+**Gate decisions were never affected** (`score_gates` has always used official labels). What
+was affected is every human judgement made off the daily numbers.
+
+### SHIPPED
+
+1. **Dashboards now read OFFICIAL labels.** §5 of the mean-rev-status skill is rewritten to
+   source `data/research/paper_official/daily_scores.parquet` (virgin era, entry >= 06-19),
+   showing official total$/daily$/WR with `engine$` + an `infl` ratio column kept visible
+   beside them. §5b (today) cannot be honest intraday — official labels arrive with the
+   nightly — so it is now explicitly labelled "ENGINE-settled, ~3x hot" in the code, the
+   template, and the notes. §7 templates and the §8 diary rules updated to match: no paper
+   dollar may be quoted in the diary without citing the official number.
+   `status.py:103` header relabelled. **New alarm** in `hourly_monitor.sh` (step 6): warn if
+   `daily_scores.parquet` is >26h stale — the honest pipeline had no dead-man's switch, and a
+   dead nightly silently starves every gate read.
+2. **C1 — restart no longer discards the intent backlog** (`live_executor.py`, `processed = 0`).
+   It used to start reading at EOF, so every restart threw away whatever was queued with no
+   log line, no fill record, no counter. The hourly cron is the executor's only supervisor, so
+   an unnoticed crash could silently drop up to an hour of intents. Replay is free: the
+   existing gates reject stale lines (time_left < 20s before any network call, done_slugs,
+   age > 10s under EXEC_GUARDS=on). Pinned by a new test.
+3. **C6 — preflight splits `above_band` out of `dry`.** A healthy book priced above our
+   ceiling was labelled identically to an empty one (band_depth is 0 by construction once the
+   touch clears the ceiling), which already caused one misdiagnosis. Both verdicts still get
+   the SAME retries and the same skip — the split is purely so they are tellable apart, which
+   the 08-07 hype fill-rate calibration needs. Two new tests pin both sides.
+4. **C4-lite** — `intents.jsonl` (458KB, never rotated) was fully re-read twice per second
+   forever, with settlement sitting behind it. Now re-read only when the file grows.
+5. **C7** — `EXEC_SYMBOLS=btc,eth,sol,xrp` written explicitly into `.env`. The operative live
+   allowlist previously existed ONLY as a code default while `.env` showed `SYMBOLS` = 7 coins
+   two lines above, which reads as if live trades all seven.
+6. **UPTOK filter in `score_gates.load_fills()`** — 16 synthetic smoke-test rows sit in
+   `fills.jsonl` and **3 of them carry a real sid** (`det_d12_wide_live`, ok=true), so any
+   lifetime read without `--since` scored fake fills. No registered gate was affected (all
+   windows start 07-03+); the ledger stays immutable, the reader filters.
+7. **Test-suite hygiene**: two "ships unarmed" pins had been RED since 07-25/07-26 because the
+   module calls `load_dotenv()` at import and `.env` legitimately arms those knobs. They now
+   assert the shipped fallback via `_shipped_default()`. A permanently red suite hides the
+   next real regression. **Full executor suite: 43/43 green.**
+
+### GATE 08-03 SCORED: fav_disagree_live $15 rung -> EXTEND at $10 (2nd extension)
+
+n=31, total +$120.74, **EV/fill +$3.895 CI [-0.41,+8.12]**, WR 55%, per-$ +0.422 CI
+[-0.05,+0.88], fill-rate 31/41. Both CIs span zero (per-$ by $0.05) => registered branch is
+extend, no config change. Next look **2026-08-17**. Full entry in the ledger.
+
+### FORWARD GATE CALENDAR (supersedes the 08-01 table below for dates only)
+
+| date | gate | status |
+|---|---|---|
+| ~~08-03~~ | fav_disagree_live $15 rung | **SCORED 08-03 -> extend at $10; next look 08-17** |
+| 08-06 | R1 xb live promotion | pending — **the week's biggest lever** (+$3-4/day if it passes) |
+| 08-07 | fav_disagree_hi_live $10 rung | pending — n~22 vs the n>=25 bar, so likely "extend to 08-21" |
+| 08-07 | hype fill-rate calibration | pending — realized 56% vs the 40% floor; needs `--symbol` on score_live |
+| 08-07 | R2 widening cell | pending |
+| 08-07 | R4 hour gate (ONE look) | pending — weakest prior, likely DROP; note NO hour-exclusion knob exists yet |
+| 08-07 | xh5y_g2_v1 14-day twin | pending — if it passes, live TALK only (5m slugs are unproven in the executor) |
+| 08-08 | C2 concurrency fix + dry-run soak | scheduled (deliberately after the measurement window) |
+| 08-14 | doge + bnb capacity (one look) | pending — default DROP; **also det_lwd_live stop-rule re-read** |
+| 08-15 | EDGE HUNT v4 reveal | sealed |
+| 08-17 | fav_disagree_live 2nd extension read | registered today |
+
+### THE PROFIT PICTURE (honest)
+
+Live is **-$12.89** lifetime on 757 fills, running about **-$1.4/day**: `fav_disagree_live`
+earns (+$54.23 lifetime, the ONLY book with payoff ratio > 1 at 2.02) but is starved to ~0.6
+fills/day; `fav_disagree_hi_live` is **-$22.26 in 9 days** and its own official twin never
+supported it (+$3 lifetime, CI spans zero); `det_lwd_live` costs ~$1/day as an execution
+canary. **Volume is allocated inversely to EV** — that is the whole problem, and the dated
+gates are the mechanism that fixes it, not a new edge hunt.
+
+Volume decay is coverage, not signal: armed-coin share fell 100% (W23-W28) -> 38% (W30) ->
+27% (W32) as intents moved to unarmed coins; fills/week 216 -> ~40. But **88% of the blocked
+volume is `det_lwd_live` on hype/doge at -$0.128/fill official**, so the allowlist is mostly
+doing its job. A global widen would put the losing probe on the new coins at 14x the volume
+of the strategy that actually has the edge. Per-strategy grants only.
+
+### USER DECISIONS TAKEN
+
+- `det_lwd_live`: **keep at $2**, re-read its stop rule at the **08-14** gate day (not 08-07).
+- `fav_disagree_hi_live`: **let the 08-07 gate decide**, do not disarm early despite the bleed.
+  Preserving pre-registration discipline is worth more than ~4 days of a capped loss.
+- Bundle A: **ship now**, one deliberate restart in the intent dead zone.
+
+### NEW HYPOTHESIS REGISTERED: the fill-time floor leak ("knife fills") — gate 08-24
+
+Found while closing the fills-accounting question, which itself came back CLEAN:
+`usdc_paid / filled_shares == avg_price` on **742/742** fills, so the share counts are sound
+and `avg_price` beating the round-1 quote is just laddered-VWAP arithmetic. That item is closed.
+
+What it surfaced instead: split live fills by `drop = quoted_ask - avg_price`, on official labels.
+
+| cohort | n | EV/fill | per-$ | WR | total |
+|---|--:|--:|--:|--:|--:|
+| drop > 5c | 91 | **-0.727** | -0.159 | 57% | **-$66.12** |
+| drop 1-5c | 229 | +0.363 | +0.074 | 71% | +$83.19 |
+| drop <= 1c | 421 | -0.076 | -0.016 | 74% | -$31.96 |
+
+Both obvious confounds are REJECTED: it is not the dead `det_d12_dual_live` book (every
+strategy's knife cohort is negative), and it is not pre-guard history (post-07-06 the effect is
+STRONGER: n=19 EV -1.335 WR 47%). On the three currently-armed books alone: knife n=57
+**-$27.78** vs the rest n=427 **+$74.33**.
+
+This is not a new edge claim — it is an enforcement gap in an already-validated guard.
+`EXEC_FLOOR_DROP` exists precisely because a cheap fill on a collapsing book is a knife-catch,
+and `_preflight`'s own docstring calls that cohort "-EV (measured)". But the guard only tests
+the book at PREFLIGHT; all 14 post-guard cases carry `guard.verdict == "ok"` and then the book
+fell away during the ladder, letting the same cohort back in at fill time.
+
+**Nothing shipped.** A post-hoc live slice is how this project has been fooled 43 times.
+Registered in the ledger with the threshold frozen at drop>0.05, gate **2026-08-24**, promote to
+enforce iff forward n>=25 AND EV<0 AND CI-hi<0, else DROP permanently. Recommended first step is
+SHADOW mode (log `would_abort_fill_floor`, change no behaviour) — it cannot contaminate any gate
+and it replaces a post-hoc slice with clean forward data. Needs user sign-off either way: it
+changes real-money execution.
+
+### OPERATIONAL LESSON: don't run the test suite next to a live executor
+
+The two "stale signal" skips at 18:29 IDT (ages **157.8s / 177.7s**, vs the 14-31s historical
+range) were **caused by this session's own test runs**, not by any code change: two concurrent
+pytest suites drove load average to 9.7, starved the executor's 2 Hz poll loop for ~3 minutes,
+and it caught up the same second the run finished. Two real intents were correctly dropped by
+the 10s staleness gate. The same contention also produced 7 phantom failures in a concurrent
+full-suite run that passes cleanly when run alone (43/43 file, 385 research+executor).
+`CLAUDE.md` now requires `nice -n 19` for the suite. Same external-CPU-hog mode as 06-06.
+
+### STILL OPEN (deliberately deferred past gate week)
+
+- **C2 (concurrency) is NOT a one-liner** — bare `asyncio.create_task` at the intent loop has a
+  same-slug double-trade race: `_blocked` checks `done_slugs` synchronously but
+  `inflight_slugs.add` happens AFTER the preflight await, so two intents for one slug can
+  interleave and both pass. Needs the slug reserved before the first await, then a dry-run
+  soak diffing decisions against the live process. **Scheduled 08-08.** Until then the serial
+  loop head-of-line blocks (p90 ladder latency 9.7s against a 10s staleness bound).
+- `PER_STRAT_MAX_CONCURRENT` / `GLOBAL_MAX_CONCURRENT` are **dead code** (unreachable while
+  handling is serial). They read as a shared-wallet collateral guard and are not one. Fixing
+  C2 activates them.
+- **C5 was NOT "fixed" by adding the executor to start_all/stop_all** — that would race the
+  hh:37 monitor relaunch (a stop without EXEC_KILL loses to the cron; one with EXEC_KILL leaves
+  real money down after an engine-only maintenance stop). The runbook is the artifact.
+- ~10.6% of fills report `avg_price` >5c below `quoted_ask` with `fill_ratio` up to 4.32;
+  dollar totals reconcile ($0.112/win) so this is likely benign ladder mechanics, but the
+  share counts are unverified. Bounded check: spot-check 5 against on-chain redemptions.
+- The residual 17.6% paper-vs-real settlement disagreement is a RESEARCH item; official labels
+  bypass it, so it blocks no money. `paper_engine.py` settlement stays deliberately unchanged.
+
+---
+
 ## 2026-08-01 - GATE-WEEK PREP: repo versioned, alarm actually scheduled, score_gates tool shipped, calendar staged
 
 Five dated gates land 08-03..08-07. This session (user-approved plan) made gate week

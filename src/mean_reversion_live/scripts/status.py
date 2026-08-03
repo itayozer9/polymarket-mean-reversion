@@ -100,7 +100,11 @@ def main() -> int:
                 print(f"- signals logged today: {hb['signals_today']}")
             if "strategy_pnl" in hb:
                 print()
-                print("## Per-strategy PnL (current session)")
+                # ENGINE-settled = the paper engine's own Chainlink read. It disagrees with
+                # real on-chain settlement on ~17.6% of identical markets, biased 2.4:1 in
+                # our favour, so these dollars run ~3x hot. Honest numbers (official on-chain
+                # labels) live in data/research/paper_official/ — see scoreboard.md.
+                print("## Per-strategy PnL (current session — ENGINE-settled, ~3x inflated)")
                 print()
                 print("| strategy_id | trades | PnL |")
                 print("|---|---|---|")

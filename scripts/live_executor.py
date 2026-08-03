@@ -362,10 +362,18 @@ class Executor:
         """One get_book look before risking an order. Verdicts:
         abort_floor — best ask collapsed below entry_ask - EXEC_FLOOR_DROP: the favourite
                       flipped; a 'cheap' fill here is a knife-catch (-EV cohort, measured);
+        above_band  — the touch is ABOVE our ceiling: a healthy book priced out of the band;
         dry         — < EXEC_PREFLIGHT_MIN_DEPTH_FRAC of target_shares within [.., ceiling];
         ok          — tradeable; also returns best_ask so the ladder starts at the REAL
                       touch (an IOC below the touch is an API-400, not a fill);
-        preflight_error — book unreadable: FAIL OPEN (missed trades are the bigger leak)."""
+        preflight_error — book unreadable: FAIL OPEN (missed trades are the bigger leak).
+
+        above_band and dry are handled IDENTICALLY everywhere (same retries, same skip) —
+        the split exists only so the two are TELLABLE APART in the data. They used to share
+        the `dry` label because band_depth(.., ceiling) is 0 by construction once the touch
+        clears the ceiling, which made a priced-out book indistinguishable from an empty one
+        and cost us a misdiagnosis (.env:47-50). Do NOT make above_band skip the retries:
+        waiting for the book to reprice INTO the band is exactly the bet this edge makes."""
         try:
             book = await self.clob.get_book(token_id)
             asks, _bids = parse_book(book)
@@ -375,6 +383,8 @@ class Executor:
             depth = band_depth(asks, 0.0, ceiling)
             if best_ask < entry_ask - EXEC_FLOOR_DROP:
                 return {"verdict": "abort_floor", "best_ask": best_ask, "depth_band": depth}
+            if best_ask > ceiling:
+                return {"verdict": "above_band", "best_ask": best_ask, "depth_band": depth}
             if depth < target_shares * EXEC_PREFLIGHT_MIN_DEPTH_FRAC:
                 return {"verdict": "dry", "best_ask": best_ask, "depth_band": depth}
             return {"verdict": "ok", "best_ask": best_ask, "depth_band": depth}
@@ -591,7 +601,7 @@ class Executor:
                 # were all "touch above our ceiling", not an empty book) — re-check on a
                 # delay instead of IOC-spamming a dry ladder. N=1 is the legacy behaviour.
                 retries = 0
-                while (guard["verdict"] == "dry" and retries < EXEC_DRY_RETRY_N
+                while (guard["verdict"] in ("dry", "above_band") and retries < EXEC_DRY_RETRY_N
                        and window_end - time.time() - EXEC_DRY_RETRY_S > TIME_LEFT_MIN):
                     await asyncio.sleep(EXEC_DRY_RETRY_S)
                     guard = await self._preflight(token_id, ask, ceiling, target_shares)
@@ -599,9 +609,10 @@ class Executor:
                     retries += 1
                     guard["retried"] = True
                     guard["retries"] = retries
-                if guard["verdict"] in ("abort_floor", "dry"):
-                    note = ("guard:floor_abort" if guard["verdict"] == "abort_floor"
-                            else "guard:dry_after_retry")
+                if guard["verdict"] in ("abort_floor", "dry", "above_band"):
+                    note = {"abort_floor": "guard:floor_abort",
+                            "above_band": "guard:above_band_after_retry",
+                            "dry": "guard:dry_after_retry"}[guard["verdict"]]
                     b.done_slugs.add(slug)            # clean miss — intent consumed
                     log.warning("guard_skip", strategy_id=sid, slug=slug, side=side,
                                 note=note, **{k: guard.get(k) for k in
@@ -620,7 +631,7 @@ class Executor:
                     # breaks on the error and never advances (the $69 missed-EV bucket)
                     cur_ask = min(ceiling, max(cur_ask, round(guard["best_ask"], 2)))
             else:
-                if guard["verdict"] in ("abort_floor", "dry"):
+                if guard["verdict"] in ("abort_floor", "dry", "above_band"):
                     log.info("guard_shadow_verdict", strategy_id=sid, slug=slug, side=side,
                              **{k: guard.get(k) for k in ("verdict", "best_ask", "depth_band")})
         try:
@@ -840,17 +851,47 @@ async def run_loop(mode):
     LIVE_DIR.mkdir(parents=True, exist_ok=True)
     INTENTS.touch(exist_ok=True)
 
+    _cache = {"size": -1, "lines": []}
+
     def _complete_lines():
         # newline-terminated lines only; a partial last line (mid-write) is
         # excluded and picked up once finished. NOTE: never use f.tell() inside
         # `for line in f` — Python disables it (the bug that crashed v1).
+        # Re-read only when the file GREW: this runs at 2 Hz forever against a
+        # never-rotated ledger, and the whole loop (settlement included) sits behind it.
         try:
-            return INTENTS.read_text().split("\n")[:-1]
+            size = INTENTS.stat().st_size
+            if size != _cache["size"]:
+                _cache["lines"] = INTENTS.read_text().split("\n")[:-1]
+                _cache["size"] = size
+            return _cache["lines"]
         except OSError:
             return []
 
-    # start at end: only act on intents that arrive AFTER we start
-    processed = len(_complete_lines())
+    # Replay the backlog instead of starting at EOF. Starting at EOF meant every restart
+    # SILENTLY discarded whatever was queued — no log line, no fill record, no counter,
+    # invisible in every downstream metric. The hourly monitor is the only supervisor
+    # (cron :37), so an unnoticed crash could drop up to an hour of intents.
+    #
+    # Provably-stale lines are skipped here by timestamp rather than left to the age gate,
+    # because that gate only enforces when EXEC_GUARDS=on: relying on it would make a
+    # restart's real-money behaviour depend on an .env knob. Lines with no ts_ms (pre-06-08
+    # legacy) fail OPEN and are replayed, matching the age gate's own `if ts_ms:` semantics —
+    # the remaining gates (time_left, done_slugs) still reject them for free. Both counts are
+    # logged, so what a restart drops is never invisible again.
+    _boot = _complete_lines()
+    _cut_ms = (time.time() - EXEC_MAX_INTENT_AGE_S) * 1000.0
+    processed = 0
+    for _i, _ln in enumerate(_boot):
+        try:
+            _ts = json.loads(_ln).get("ts_ms")
+        except Exception:
+            _ts = None
+        if _ts is None or float(_ts) >= _cut_ms:
+            break          # fresh, or unstamped (fail OPEN) -> replay from here on
+        processed = _i + 1
+    log.info("intent_backlog_at_start", total=len(_boot), skipped_stale=processed,
+             replaying=len(_boot) - processed, max_age_s=EXEC_MAX_INTENT_AGE_S)
     while True:
         if _killed(ex.mode):
             log.warning("kill_switch_halt"); break

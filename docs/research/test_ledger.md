@@ -1063,3 +1063,77 @@ cells + new-cell scan). V4b = the two frozen early-timing disagree cells (second
 LAST look for that thread). All 7 coins; official labels; guarded fills; slug-clustered
 95% CI; BH-10%. NOT run: broad sweep, flow, maker, g2bps grid iteration. Both fail =>
 next campaign waits for the next 3-week block (earliest 2026-09-05).
+
+### GATE 2026-08-03 SCORED: fav_disagree_live $15 rung -> EXTEND at $10 (2nd extension)
+
+Registered command, run verbatim:
+`score_gates live --sid fav_disagree_live --since 2026-07-03T07:40 --until 2026-08-03`
+
+Result: **n=31 (31 slugs), total +$120.74, EV/fill +$3.895 CI [-0.41,+8.12], WR 55%,
+per-$ +0.422 CI [-0.05,+0.88], fill-rate 31/41, pending 0.**
+
+Registered rule: CI-lo>0 on BOTH $/fill and per-$ => propose $15; spans 0 => extend at $10;
+<= -$0.50/fill with CI-hi<0 => stop. **BOTH CIs span zero** (per-$ by $0.05), so the branch
+is EXTEND AT $10 — the 2nd extension, no config change. Point estimates are strongly positive
+and the per-$ leg is one fill from clearing, but the rule is the rule; we do not size up on a
+CI that spans zero.
+
+Next look **2026-08-17** (standing 2-week convention), same command with `--until 2026-08-17`.
+Note for that read: the book took 41 attempts to get 31 fills across the whole window and its
+last fill was 07-29 20:25 IDT, so n grows ~1/day at best. If n has not moved materially by
+08-17, the honest branch is a 3rd extension, not a verdict — do not force one on n<40.
+
+Deliberately NOT done today: no band iteration, no dist_min change, no re-scoring on other
+windows, no peeking at the 08-06/08-07 gate slices.
+
+### NEW HYPOTHESIS REGISTERED 2026-08-03: fill-time floor leak ("knife fills")
+
+**Found while verifying the fills-accounting item, NOT by a sweep.** Bounded read-only check
+of `avg_price` vs `quoted_ask` on the live ledger x official labels (n=741 labelled fills).
+
+Accounting first (the original question): `usdc_paid / filled_shares == avg_price` on
+**742/742** fills. The share counts and dollars are internally consistent; `avg_price` is the
+realized VWAP of a laddered fill, so beating the round-1 quote is expected, not a bug. **That
+item is CLOSED.**
+
+What the check surfaced instead — split live fills by `drop = quoted_ask - avg_price`:
+
+| cohort | n | EV/fill | per-$ | WR | total |
+|---|--:|--:|--:|--:|--:|
+| drop > 5c | 91 | **-0.727** | -0.159 | 57% | **-$66.12** |
+| drop 1-5c | 229 | +0.363 | +0.074 | 71% | +$83.19 |
+| drop <= 1c | 421 | -0.076 | -0.016 | 74% | -$31.96 |
+
+Confounds tested and REJECTED:
+- **Not the dead `det_d12_dual_live` book**: every strategy's knife cohort is negative
+  (det_lwd -7.90/52, fav_disagree_live -15.29/4, det_d12_wide -6.68/4, hi_live -4.59/1).
+- **Not pre-guard history**: post-07-06 (floor guard + clamp era) the effect is STRONGER —
+  knife n=19 EV **-1.335** per-$ -0.332 WR 47%, vs the rest at EV +0.696.
+- **Currently-armed books only** (det_lwd_live + fav_disagree_live + fav_disagree_hi_live):
+  knife n=57 EV -0.487 per-$ -0.113 WR 60% **total -$27.78**; rest n=427 EV +0.174 per-$
+  +0.037 WR 74% **total +$74.33**. ~12% of fills; 11.8% of deployed capital.
+
+**Mechanism (already validated, not a new claim).** This is the SAME cohort `EXEC_FLOOR_DROP`
+was built for — `_preflight`'s docstring already says a cheap fill on a collapsing book "is a
+knife-catch (-EV cohort, measured)". The guard only tests the book at PREFLIGHT
+(`best_ask < entry_ask - 0.04`). These fills PASS preflight (all 14 post-guard cases carry
+`guard.verdict == "ok"`) and then the book falls away during the ladder, so the same -EV
+cohort re-enters at fill time. It is an enforcement gap in a validated guard, not a new edge.
+
+**Pre-registered, because a post-hoc live slice is exactly how this project has been fooled
+43 times.** NOTHING ships today.
+
+- **Instrument first (recommended):** add the fill-time floor check in **shadow mode** only —
+  log `would_abort_fill_floor` with the drop, change no behaviour. Zero gate contamination
+  (shadow cannot alter any measurement), and it produces clean FORWARD data instead of another
+  post-hoc slice.
+- **Gate date 2026-08-24** (3 forward weeks). **Rule, fixed now:** on forward fills only, with
+  official labels and slug-clustered 95% CI — promote the guard to enforce iff the shadow-flagged
+  cohort has **n>=25 AND EV/fill < 0 AND CI-hi < 0**; if EV >= 0 or CI-hi >= 0, DROP the idea
+  permanently (do not re-slice by threshold). Threshold frozen at **drop > 0.05**; no grid
+  search over the cut, and no re-reading of the historical cohort above.
+- Requires user sign-off before ANY enforce step: it changes real-money execution.
+
+Why this could matter more than a sizing rung: on the three armed books the normal-fill cohort
+is **+$74.33** while the knife cohort is **-$27.78**. If forward data confirms, the live book's
+sign flips on execution alone, with no new edge and no extra risk.

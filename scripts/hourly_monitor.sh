@@ -54,4 +54,12 @@ case "$CL_STATUS" in
   "")          echo "[warn] no chainlink_status line in combined.log — collector may not be running" ;;
 esac
 
+# 6) Honest-label pipeline liveness. EVERY gate read (score_gates, the §5 paper table) scores
+#    on the official on-chain labels this nightly produces. If it dies, the numbers silently
+#    fall back to a stale window while still LOOKING fresh — and the engine tape they'd be
+#    compared against runs ~3x hot. Nightly is launchd ~03:15Z, so >26h means it missed a run.
+if [ -n "$(find "$REPO/data/research/paper_official/daily_scores.parquet" -mtime +1 2>/dev/null)" ]; then
+  echo "[warn] paper_official labels STALE (>26h) — nightly_honest may be dead. Gates and the §5 paper table are scoring on old labels. Run: ./scripts/nightly_honest.sh"
+fi
+
 echo "----- done -----"
