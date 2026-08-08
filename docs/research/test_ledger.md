@@ -1438,3 +1438,54 @@ realized_total +$28.23 vs +$14.27 on official labels ($13.96 overstatement, ~$0.
 the $1/share settlement convention; all five other books reconcile to the cent). The state
 file is NOT hand-edited; a nightly reconciliation alarm (executor book vs `score_gates live`)
 ships instead, acceptance = it flags exactly this drift.
+
+---
+
+## 2026-08-08 - PORTFOLIO ASSEMBLY STUDY (existing data only; no forward tests)
+
+Registered deliverable of the consolidation plan. Four questions, all answered from data
+already on disk (87k official labels, 42k paper fills, 1,430 live attempts). Commands
+inline; nothing here opens a new experiment.
+
+**(1) Correlation + combined equity** (daily official P&L, virgin era >= 06-19, 51 days,
+daily_scores.parquet): corr(fav_disagree_live twin, early_disagree_live twin) = **0.20**
+(consistent with Jaccard 0.039 - genuinely additive). Combined twins: **+$13.59/day** mean,
+std $28.08/day, **max drawdown -$50.00**, worst day -$47.85, 27% losing days. Paper-twin
+numbers (7 coins, idealized fills) - the SHAPE is the finding, not the level. Verdict: the
+$50/day caps and the -$50 drawdown kill are correctly sized for the two-book portfolio;
+the wider family (fav_disagree 0.73, fav_disagree_d5 0.38 vs fav_disagree_live) adds
+little diversification, confirming the d5/R2 cell is a widening, not a new book.
+
+**(2) Funnel coverage audit, cheap band, last 14d** (twin parquet vs intents.jsonl vs
+fills.jsonl, since 07-25): twin signals 18 (7 coins) of which only **7 on the 4 live
+coins** (eth 5, sol 2, btc/xrp ZERO) -> 18 intents -> 6 attempts -> **5 fills** (1
+floor_abort). The executor funnel inside the allowlist converts **71% signal->fill** and
+leaks almost nothing; the binding constraint is the SIGNAL RATE on the executable coins
+(0.5/day). 11 of 18 signals were hype(5)/doge(3)/bnb(3), all allowlist-gated. Verdict:
+coverage recovery = the coin-grant gates (08-14 doge/bnb, 08-28 hype), NOT more executor
+plumbing. The 07-25 "coverage beats discovery" doctrine survives only in its band-aware
+form.
+
+**(3) Ladder depth check** (guard.depth_band x quoted_ask on all 96 fav_disagree_live
+attempts): median in-band preflight depth **$69**; windows with full depth for a $10/$15/
+$25/$40 bet: **73% / 69% / 64% / 58%**. fill_ratio on ok fills: mean 1.04, partials
+(<95%) only 4%. FAK ladders bank whatever depth exists (a thin window = smaller position,
+not a miss), so per-$ EV is insulated. Verdict: **$15 and $25 rungs are depth-supported
+today**; the $40 rung re-checks on post-$25 data (58% full-depth + more partials).
+
+**(4) fav_disagree hype cheap-band read** (`score_gates paper --sids fav_disagree
+--symbol hype --ask-band 0.05,0.45 --since 2026-06-19`): **n=9**, +$11.60 total, EV
++$1.289/fill, CI [-7.60, +9.92]. DOES NOT QUALIFY (bar: n>=30 AND CI-lo>0) - hype rarely
+signals fav_disagree below 0.45 (the 94%-above-0.45 shape). Verdict: **no
+fav_disagree_live:hype bundling**; the 08-28 hype decision remains early_disagree_live
+only, exactly as registered.
+
+**R1 leg (b) now runnable + first evidence** (xb mode added to rejudge_live_model,
+mirroring the engine _xb_entry gate on the causal xbook frame): at $10, live-3 tilt,
+frame through 07-24: **live_guarded -$1.363/fill CI [-2.22, -0.28]** (CI-hi < 0), v2
+idealized -$0.704 CI [-1.28, -0.10], future split guarded -$0.728 CI [-1.81, +0.52].
+Recorded as PRE-GATE evidence only; the 2026-08-20 gate runs as registered on a rebuilt
+frame (`uv run python -m research.dataset.xbook` first). It is however fully consistent
+with FINDING B (all of xb's paper value sits in the closed >0.45 band) and with the
+registered terminal default: **xb does not arm as taker unless the 08-20 rebuild
+contradicts both legs of today's evidence.**

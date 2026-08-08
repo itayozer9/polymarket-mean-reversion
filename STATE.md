@@ -4,6 +4,59 @@
 
 ---
 
+## 2026-08-08 - CONSOLIDATION DAY: doctrine adopted, det retired, C2 shipped, freeze declared
+
+The user reviewed everything and ratified a consolidation plan (session
+"peaceful-herding-puppy", plan file of the same name): stop depending on ever-more forward
+tests; execute, cover, and scale the one proven edge. Three USER DECISIONS recorded (also
+in the ledger): (1) `det_lwd_live` retires NOW, (2) the `fav_disagree_live` size ladder is
+FULLY MECHANICAL ($10->$15->$25->$40, dual-CI + fill-rate>=45% + depth check per rung,
+rung-down on EV<0, kill at -$50 drawdown, notify-only), (3) FULL RESEARCH FREEZE after the
+August calendar until the portfolio is stable at the $25+ rung. All codified in
+**PORTFOLIO.md** (new, in the read order): 8 arming rules, the ladder, the closed doors.
+
+**Shipped today (all committed):**
+- The entire 08-07 working tree (gate day + adverse-selection proof + leg-2 tilt
+  recalibration, docstrings corrected to the pipeline fit) - it had been the largest
+  unpersisted state in the repo.
+- **det_lwd_live RETIRED** (live:false, twin enabled). Engine restarted 08:45 UTC; armed
+  set is now **{fav_disagree_live $10} only**. The 08-14 stop-rule re-read is moot.
+- **C2**: executor reserves the slug BEFORE its first await (the same-slug double-trade
+  race is closed), dispatch is concurrent (head-of-line blocking gone), caps count
+  reservations (PER_STRAT/GLOBAL are real now, GLOBAL 4->3), and a NEW global
+  one-position-per-(window, direction) cap across books (macro-correlation). 47/47 tests.
+  NOT yet live: a dry-run soak (EXEC_SOAK_DIR=data/live/soak_c2, pid see logs/soak_c2.log)
+  runs alongside the live executor; **deploy 08-09 via restart_executor.sh after diffing
+  the soak**, and verify the C1 replay counters at that restart.
+- **Nightly reconciliation alarm** (`research/analysis/reconcile_executor.py`, wired into
+  nightly_honest.sh): executor books vs official ledger. Found det_lwd_live overstating by
+  **+$13.97** (frozen allowance; --strict flags it); the five other books reconcile to the
+  cent.
+- **R1 leg (b) runnable**: xb mode in rejudge_live_model. First evidence (frame through
+  07-24, live-3): guarded **-$1.363/fill CI [-2.22,-0.28]** - consistent with the terminal
+  default that xb never arms as taker. Gate still runs 08-20 on a rebuilt frame.
+- Knife-fill SHADOW instrumentation confirmed already shipped 08-03 (knife_catch flag) -
+  nothing new needed before the 08-24 gate.
+- 5m label coverage test now excludes cross-coin Polymarket voids (08-05 had one).
+
+**Portfolio assembly study** (ledger, same date): armed+candidate twins corr **0.20**,
+combined +$13.59/day paper, max DD -$50 in 51d (caps correctly sized); funnel inside the
+allowlist converts **71% signal->fill** - the constraint is signal rate on the 4 live
+coins (0.5/day), 11 of 18 recent signals were on unallowed coins; depth supports the $15
+and $25 rungs today ($40 re-checks later); fav_disagree hype cheap-band n=9 - **no hype
+bundling**, 08-28 stays early_disagree-only.
+
+**Calendar amendments** (everything else in the 08-07 table stands): 08-14 det re-read
+CLOSED (moot); 08-17 rung read then every 14d mechanically per PORTFOLIO.md; 08-20 xb
+terminal default = no taker arming; 08-21 xh5y is paper-keep-or-kill only (no 5m executor
+during the freeze); after 08-28 the freeze begins.
+
+**Honest baseline going into the plan**: live lifetime -$2.42 on $3,327 deployed; the armed
+book +$83.35 (+$1.544/fill, per-$ +0.209, no adverse selection). Target: +$5-10/day by
+mid-September at the $25 rung, worst day bounded by caps.
+
+---
+
 ## 2026-08-07 - GATE DAY: six gates scored, ZERO new arming; adverse selection proven
 
 All six dated gates ran verbatim through `score_gates.py`. Nightly labels were 2.0h fresh.
