@@ -1405,3 +1405,36 @@ sign-off; it is a real-money grant via `EXEC_SYMBOLS_EXTRA`.
 
 ARMED SET UNCHANGED: {det_lwd_live $2, fav_disagree_live $10}. No config was modified, no restart
 was performed for this item.
+
+---
+
+## 2026-08-08 - det_lwd_live RETIRED from real money (user decision); consolidation plan adopted
+
+**USER DECISIONS (recorded 2026-08-08, session "peaceful-herding-puppy"):**
+1. `det_lwd_live` retires NOW, ahead of its registered 08-14 stop-rule re-read.
+2. The `fav_disagree_live` size ladder becomes FULLY MECHANICAL: $10 -> $15 -> $25 -> $40,
+   reads every 14 days after the last rung change, criteria per rung: per-fill CI-lo>0 AND
+   per-$ CI-lo>0 on the current-rung window AND fill-rate >= 45% AND a book-depth check
+   supporting the next size. Rung-down on any 14d read with EV<0. Kill at -$50 book drawdown
+   from high-water or the standing stop rule. Notification at every change, no per-rung
+   approval.
+3. FULL RESEARCH FREEZE after the August calendar: no new discovery campaigns until the
+   portfolio is stable at the $25+ rung. Analysis of existing data allowed; new experiments
+   not.
+
+**det_lwd_live retirement.** `live: true -> false` in strategies.yaml, `enabled` stays true
+(paper twin keeps writing). Grounds, all official-label: lifetime n=424 +$14.27 (+$0.034/fill,
+CI [-0.19, +0.25], never cleared zero); last-14d at the 08-01 read -$0.522/fill CI
+[-1.10, +0.01] (the stop rule's EV leg crossed, CI-hi missed by $0.01); adverse-selection gap
+-$0.52/att CI [-0.84, -0.20], clear of zero (08-07 measurement, n=817 attempts). Its remaining
+value was calibration volume for the fill model (821 of 1,430 lifetime labelled attempts);
+under the research freeze that value goes to ~zero while the bleed (~$1/day recently) does not.
+Arming is user-owned: the registered stop rule was a commitment to STOP if tripped, never a
+commitment to keep running otherwise. The 08-14 re-read is hereby CLOSED as moot.
+Armed set after this change: **{fav_disagree_live $10} only.**
+
+Bookkeeping note, found 2026-08-08: `executor_state.json` carries `det_lwd_live`
+realized_total +$28.23 vs +$14.27 on official labels ($13.96 overstatement, ~$0.042/win,
+the $1/share settlement convention; all five other books reconcile to the cent). The state
+file is NOT hand-edited; a nightly reconciliation alarm (executor book vs `score_gates live`)
+ships instead, acceptance = it flags exactly this drift.

@@ -1303,9 +1303,16 @@
 # to data/live/intents.jsonl). $50/day hard_worstcase cap (free safety; det never trips it).
 # The standalone executor (scripts/live_executor.py, Python 3.11) places the real orders.
 - id: det_lwd_live
-  name: "Determinism v2 LIVE probe ($2/trade real money; dist>=8bps locked-favourite filter for Chainlink; $25/day hard cap)"
+  name: "Determinism v2 paper twin (RETIRED from real money 2026-08-08; dist>=8bps locked-favourite filter; was the $2 execution canary)"
   enabled: true
-  live: true
+  live: false  # RETIRED 2026-08-08 (user decision, ahead of the registered 08-14 re-read).
+               # Rationale: last-14d official -$0.522/fill CI [-1.10, +0.01] (stop rule's EV leg
+               # crossed, CI-hi missed by $0.01), adverse-selection gap -$0.52/att CI [-0.84, -0.20]
+               # clear of zero, lifetime +$14.27 official on 424 fills (~breakeven canary bleeding
+               # ~$1/day recently). Its calibration value (821 labelled attempts feeding the fill
+               # model) drops to ~zero under the 2026-08-08 research freeze. Arming is user-owned:
+               # the registered stop rule was a commitment to stop, never a commitment to keep
+               # running. enabled stays true so the paper twin keeps writing at zero cost.
   type: determinism
   starting_capital_usd: 100.0
   timeframe: "15m"
