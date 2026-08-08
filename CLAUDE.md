@@ -5,8 +5,9 @@
 **Read order for new sessions:**
 1. **`GOAL.md`** — the *why*: the user's manual strategy, the end goal, the rules that don't change
 2. **`STATE.md`** — where we left off last session, what's running now
-3. **`BACKTEST_VERDICT.md`** — statistical proof the edge is real (Bonferroni-passing on 4 symbols)
-4. This file (`CLAUDE.md`) — *how* we built the bot
+3. **`PORTFOLIO.md`** — the LAW for real money: arming rules, size ladder, closed doors (2026-08-08)
+4. **`BACKTEST_VERDICT.md`** — statistical proof the edge is real (Bonferroni-passing on 4 symbols)
+5. This file (`CLAUDE.md`) — *how* we built the bot
 
 If you read only ONE file, read `GOAL.md`. The whole project is a translation of the manual strategy described there into a 24/7 bot.
 
