@@ -134,19 +134,23 @@ def test_caps_come_from_the_intent(tmp_path):
 # --- concurrency -----------------------------------------------------------
 
 def test_per_strategy_concurrency_cap(tmp_path):
+    # C2: caps count RESERVATIONS (inflight_slugs, made before the first await), not
+    # ladders (b.open) — counting open let N intents pass _blocked during each other's
+    # preflight awaits and all ladder at once.
     ex = le.Executor(clob=None, mode="dry_run", state_path=tmp_path / "s.json")
     a = ex._book("A")
-    a.open = le.PER_STRAT_MAX_CONCURRENT
-    assert "max concurrent" in ex._blocked(_intent("A", _slug()))
-    # a different strategy with no open positions is unaffected
-    assert ex._blocked(_intent("B", _slug())) is None
+    a.inflight_slugs = {_slug("btc"), _slug("eth")}
+    assert len(a.inflight_slugs) >= le.PER_STRAT_MAX_CONCURRENT
+    assert "max concurrent" in ex._blocked(_intent("A", _slug("sol")))
+    # a different strategy with no reservations is unaffected
+    assert ex._blocked(_intent("B", _slug("sol"))) is None
 
 
 def test_global_concurrency_ceiling(tmp_path):
     ex = le.Executor(clob=None, mode="dry_run", state_path=tmp_path / "s.json")
-    # spread one open position across enough strategies to hit the global ceiling
+    # spread one reservation across enough strategies to hit the global ceiling
     for i in range(le.GLOBAL_MAX_CONCURRENT):
-        ex._book(f"S{i}").open = 1
+        ex._book(f"S{i}").inflight_slugs = {_slug(f"c{i}")}
     reason = ex._blocked(_intent("FRESH", _slug()))
     assert reason is not None and "global max concurrent" in reason
 
@@ -573,19 +577,86 @@ async def test_burst_cap_counts_inflight_sibling(tmp_path):
 async def test_burst_cap_off_by_default_and_sid_scoped(tmp_path, monkeypatch):
     monkeypatch.setattr(le, "gamma_tokens", lambda slug: ("UPTOK", "DOWNTOK"))
     clob = _FakeClob(_agg_filled())
-    # cap off (default 0): siblings flow freely
+    # cap off (default 0): the burst gate itself never fires. Since C2 the GLOBAL
+    # (window, direction) macro-correlation cap still holds a filled same-direction
+    # sibling — the opposite direction is what flows freely.
     ex = le.Executor(clob=clob, mode="live", state_path=tmp_path / "s.json",
                      fills_path=tmp_path / "fills.jsonl",
                      burst_cap=0, burst_cap_sids=set())
     btc, eth, _ = _sibling_slugs()
-    await ex.handle(_full_intent("fav_disagree_live", btc))
-    assert ex._blocked(_full_intent("fav_disagree_live", eth)) is None
-    # cap on but scoped to ANOTHER sid: this strategy unaffected
+    await ex.handle(_full_intent("fav_disagree_live", btc, side="UP"))
+    same_dir = ex._blocked(_full_intent("fav_disagree_live", eth, side="UP"))
+    assert same_dir is not None and "macro-correlation" in same_dir
+    assert ex._blocked(_full_intent("fav_disagree_live", eth, side="DOWN")) is None
+    # cap on but scoped to ANOTHER sid: the burst gate does not fire for this strategy
+    # (the macro cap still does, so probe the opposite direction)
     ex2 = le.Executor(clob=clob, mode="live", state_path=tmp_path / "s2.json",
                       fills_path=tmp_path / "fills2.jsonl",
                       burst_cap=1, burst_cap_sids={"fav_disagree_live"})
-    await ex2.handle(_full_intent("early_disagree_live", btc))
-    assert ex2._blocked(_full_intent("early_disagree_live", eth)) is None
+    await ex2.handle(_full_intent("early_disagree_live", btc, side="UP"))
+    assert ex2._blocked(_full_intent("early_disagree_live", eth, side="DOWN")) is None
+
+
+# --- C2 (2026-08-08): slug reservation before the first await + macro-correlation cap ------
+
+class _SlowClob(_FakeClob):
+    """fill_or_chase parks on an event, so a sibling intent can arrive mid-ladder."""
+    def __init__(self, agg, gate):
+        super().__init__(agg)
+        self._gate = gate
+
+    async def fill_or_chase(self, **kw):
+        await self._gate.wait()
+        return await super().fill_or_chase(**kw)
+
+
+async def test_same_slug_sibling_blocked_during_awaits(tmp_path, monkeypatch):
+    """THE C2 race: a duplicate same-slug intent dispatched while the first is mid-await
+    must be rejected by the reservation, not double-traded."""
+    import asyncio
+    monkeypatch.setattr(le, "gamma_tokens", lambda slug: ("UPTOK", "DOWNTOK"))
+    gate = asyncio.Event()
+    clob = _SlowClob(_agg_filled(), gate)
+    ex = le.Executor(clob=clob, mode="live", state_path=tmp_path / "s.json",
+                     fills_path=tmp_path / "fills.jsonl")
+    slug = _slug()
+    t1 = asyncio.create_task(ex.handle(_full_intent("A", slug)))
+    await asyncio.sleep(0.05)                     # t1 is parked inside fill_or_chase
+    t2 = asyncio.create_task(ex.handle(_full_intent("A", slug)))
+    await asyncio.sleep(0.05)
+    gate.set()
+    await asyncio.gather(t1, t2)
+    assert len(clob.chase_calls) == 1             # exactly one order placed
+    assert ex.books["A"].inflight_slugs == set()  # reservation released
+
+
+async def test_reservation_released_on_early_abort(tmp_path, monkeypatch):
+    """A handle that dies before trading (token resolve fails) must free both the slug
+    reservation and the (window, direction) slot — a miss is not a position."""
+    monkeypatch.setattr(le, "gamma_tokens", lambda slug: None)
+    ex = le.Executor(clob=None, mode="live", state_path=tmp_path / "s.json",
+                     fills_path=tmp_path / "fills.jsonl")
+    btc, eth, _ = _sibling_slugs()
+    await ex.handle(_full_intent("A", btc, side="UP"))
+    assert ex.books["A"].inflight_slugs == set()
+    assert ex.window_side == {}
+    assert ex._blocked(_full_intent("B", eth, side="UP")) is None
+
+
+async def test_window_direction_cap_is_cross_book(tmp_path, monkeypatch):
+    """After book A fills UP in a window, book B may not open UP in the SAME window on
+    any coin (one leveraged macro bet), but DOWN and the next window both flow."""
+    monkeypatch.setattr(le, "gamma_tokens", lambda slug: ("UPTOK", "DOWNTOK"))
+    clob = _FakeClob(_agg_filled())
+    ex = le.Executor(clob=clob, mode="live", state_path=tmp_path / "s.json",
+                     fills_path=tmp_path / "fills.jsonl")
+    btc, eth, _ = _sibling_slugs()
+    await ex.handle(_full_intent("A", btc, side="UP"))
+    blocked = ex._blocked(_full_intent("B", eth, side="UP"))
+    assert blocked is not None and "macro-correlation" in blocked
+    assert ex._blocked(_full_intent("B", eth, side="DOWN")) is None
+    ws2 = int(time.time()) + 600 + 900
+    assert ex._blocked(_full_intent("B", f"eth-updown-15m-{ws2}", side="UP")) is None
 
 
 async def test_burst_cap_restart_safe_via_done_slugs(tmp_path, monkeypatch):

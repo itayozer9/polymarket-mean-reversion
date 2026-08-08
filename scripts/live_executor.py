@@ -83,8 +83,10 @@ TIME_LEFT_MIN = 20        # s — need room to fill before the window resolves
 # strategies.yaml — the single source of truth).
 DEFAULT_BANKROLL_USD = 100.0   # default max cumulative realized LOSS before a strategy stops
 DEFAULT_DAILY_CAP_USD = 25.0   # default max realized LOSS per UTC day; resumes at 00:00 UTC
-PER_STRAT_MAX_CONCURRENT = 2   # open live positions per strategy
-GLOBAL_MAX_CONCURRENT = 4      # hard ceiling on in-flight orders across ALL strategies
+PER_STRAT_MAX_CONCURRENT = 2   # in-flight reserved intents per strategy
+GLOBAL_MAX_CONCURRENT = 3      # hard ceiling on in-flight reservations across ALL strategies
+                               # (3 since 2026-08-08: shared-wallet collateral + the 4 coins
+                               # move together, so wide concurrency is leverage, not breadth)
                                # (shared-wallet guard: bounds worst-case collateral drain)
 STATE_VERSION = 2
 SLIP_TICKS = 2            # (legacy) superseded by the FAK-at-edge-max fill
@@ -347,6 +349,11 @@ class Executor:
         self._state_path = Path(state_path) if state_path else STATE
         self._fills_path = Path(fills_path) if fills_path else FILLS
         self._settlements_path = Path(settlements_path) if settlements_path else SETTLEMENTS
+        # (window_start_ts, side) -> sid. One position per (window, direction) across ALL
+        # books: the live coins move together on one spot move, so a second same-direction
+        # position in the same window is the same macro bet levered up. NOT persisted; a
+        # restart mid-window loses at most one window's cross-book dedup.
+        self.window_side: dict = {}
         self._load_state()
 
     def _guard_mode(self, sid) -> str:
@@ -412,8 +419,11 @@ class Executor:
                 b.max_daily_loss_usd = float(daily_cap)
         return b
 
-    def global_open(self) -> int:
-        return sum(b.open for b in self.books.values())
+    def global_inflight(self) -> int:
+        """Reserved intents across all books. Caps count RESERVATIONS (made before the
+        first await), not ladders: counting b.open let N intents pass _blocked during
+        each other's preflight awaits and all ladder at once."""
+        return sum(len(b.inflight_slugs) for b in self.books.values())
 
     def _load_state(self):
         if not self._state_path.exists():
@@ -507,6 +517,8 @@ class Executor:
         # ---- PER-STRATEGY gates (isolated: one strategy never blocks another) ----
         if slug in b.done_slugs:
             return f"[{sid}] already traded this window"
+        if slug in b.inflight_slugs:
+            return f"[{sid}] intent already in flight for this window"
         # ---- guard: multi-coin burst cap (same strategy, same window_start_ts) ----
         # Counts CONSUMED intents (done_slugs is appended on ANY attempt, fill or clean
         # miss) + in-flight siblings — exactly the intent-level cap the backtest scored.
@@ -533,11 +545,16 @@ class Executor:
         ue = self._unsettled_ended(b)
         if ue:
             return f"[{sid}] awaiting settlement of {ue} ended window(s) before risking more"
-        if b.open >= PER_STRAT_MAX_CONCURRENT:
+        if len(b.inflight_slugs) >= PER_STRAT_MAX_CONCURRENT:
             return f"[{sid}] max concurrent {PER_STRAT_MAX_CONCURRENT}"
         # ---- GLOBAL concurrency ceiling (shared-wallet collateral guard) ----
-        if self.global_open() >= GLOBAL_MAX_CONCURRENT:
+        if self.global_inflight() >= GLOBAL_MAX_CONCURRENT:
             return f"global max concurrent {GLOBAL_MAX_CONCURRENT} (shared-wallet ceiling)"
+        # ---- GLOBAL one-position-per-(window, direction) cap (macro-correlation) ----
+        owner = self.window_side.get((_slug_window_ts(slug), intent.get("side")))
+        if owner:
+            return (f"window+direction already taken by {owner} "
+                    f"(macro-correlation cap, see PORTFOLIO.md)")
         return None
 
     async def handle(self, intent):
@@ -550,10 +567,34 @@ class Executor:
         b = self._book(sid,
                        bankroll=float(intent.get("bankroll_usd", DEFAULT_BANKROLL_USD)),
                        daily_cap=float(intent.get("max_daily_loss_usd", DEFAULT_DAILY_CAP_USD)))
+        # C2 (2026-08-08): reserve BEFORE the first await. handle() used to run its
+        # preflight/tick awaits before marking the slug in-flight, so a same-slug sibling
+        # dispatched during those awaits passed _blocked and both traded. The gap between
+        # _blocked and the reservation is now zero awaits wide.
+        wts = _slug_window_ts(slug)
+        b.inflight_slugs.add(slug)
+        self.window_side[(wts, side)] = sid
+        took_position = False
+        try:
+            took_position = await self._fill_reserved(intent, sid, b)
+        finally:
+            b.inflight_slugs.discard(slug)
+            if not took_position and self.window_side.get((wts, side)) == sid:
+                # a clean miss is not a position: free the (window, direction) slot for a
+                # sibling book; a fill keeps it until the lazy prune below
+                self.window_side.pop((wts, side), None)
+            cutoff = time.time() - 3600           # _slug_window_ts returns a str
+            for k in [k for k in self.window_side if float(k[0]) < cutoff]:
+                self.window_side.pop(k, None)
+
+    async def _fill_reserved(self, intent, sid, b) -> bool:
+        """Post-reservation half of handle(): tokens, guard, ladder, booking.
+        Returns True iff a position was taken (a real fill, or a dry-run record)."""
+        slug, side = intent["slug"], intent.get("side")
         toks = gamma_tokens(slug)
         if not toks:
             log.warning("token_resolve_failed", slug=slug)
-            return
+            return False
         up_tok, down_tok = toks
         token_id = up_tok if side == "UP" else down_tok
         ask = float(intent["entry_ask"])
@@ -561,7 +602,7 @@ class Executor:
         if not (0.01 <= ask <= ABS_MAX_PRICE):
             log.warning("intent_skipped", slug=slug, side=side,
                         reason=f"implausible entry_ask {ask}")
-            return
+            return False
         # Laddered fill capped at the strategy's OWN validated band ceiling (max_ask from the
         # intent), never the 0.92 hardcode: filling a favourite above max_ask is -EV. If the
         # quoted ask is already above the band, skip cleanly (correctly-skip-above-band).
@@ -569,7 +610,7 @@ class Executor:
         if ask > ceiling + 1e-9:
             log.info("intent_skipped", slug=slug, side=side,
                      reason=f"quoted ask {ask:.2f} > max_ask {ceiling:.2f} (-EV band)")
-            return
+            return False
         target_shares = round(bet / ask, 2)
         # Hard notional guard against the CEILING (worst-case spend), belt-and-suspenders on the cap.
         max_shares = (bet * NOTIONAL_GUARD) / ceiling
@@ -585,7 +626,7 @@ class Executor:
             b.done_slugs.add(slug)
             self._append_fill({**rec, "dry_run": True})
             self._save_state()
-            return
+            return True
 
         # ---- LIVE: laddered fill within [entry_ask, max_ask], retry across the entry budget ----
         window_end = _slug_window_end(slug)
@@ -624,7 +665,7 @@ class Executor:
                                        "latency_ms": int((time.time() - t0) * 1000),
                                        "note": note, "guard": guard})
                     self._save_state()
-                    return
+                    return False
                 if guard["verdict"] == "ok" and guard.get("best_ask"):
                     # start the ladder at the REAL touch: an IOC below the touch is an
                     # API-400 ("no orders found to match"), not a fill — fill_or_chase
@@ -687,8 +728,7 @@ class Executor:
                     if rq.get("best_ask"):
                         cur_ask = min(ceiling, max(cur_ask, round(rq["best_ask"], 2)))
         finally:
-            b.open -= 1
-            b.inflight_slugs.discard(slug)
+            b.open -= 1          # inflight reservation is released by handle()'s finally
         latency_ms = int((time.time() - t0) * 1000)
         b.done_slugs.add(slug)                                 # one intent per window — consumed
         filled = agg_shares                                    # shares received (balance-poll truth)
@@ -723,6 +763,7 @@ class Executor:
                  latency_ms=latency_ms, note=stop_note[:60])
         self._append_fill(fill)
         self._save_state()
+        return ok
 
     def _append_fill(self, rec):
         self._fills_path.parent.mkdir(parents=True, exist_ok=True)
@@ -826,7 +867,19 @@ def make_client():
 
 async def run_loop(mode):
     clob = make_client() if mode == "live" else None
-    ex = Executor(clob, mode)
+    # EXEC_SOAK_DIR: isolate a dry-run soak's state/fills/settlements so it can run
+    # alongside the live executor off the SAME intents.jsonl without touching real-money
+    # state. Deliberately ignored in live mode: the knob must never redirect real books.
+    soak = os.getenv("EXEC_SOAK_DIR")
+    if soak and mode != "live":
+        d = Path(soak)
+        d.mkdir(parents=True, exist_ok=True)
+        ex = Executor(clob, mode, state_path=d / "executor_state.json",
+                      fills_path=d / "fills.jsonl",
+                      settlements_path=d / "settlements.jsonl")
+        log.info("soak_mode", dir=str(d))
+    else:
+        ex = Executor(clob, mode)
     today = _utc_day()
     # Per-book resumed state (restart-safe: realized_by_day is reconstructed from the state
     # file, so a mid-day restart does NOT reset a strategy's daily-loss cap).
@@ -892,6 +945,13 @@ async def run_loop(mode):
         processed = _i + 1
     log.info("intent_backlog_at_start", total=len(_boot), skipped_stale=processed,
              replaying=len(_boot) - processed, max_age_s=EXEC_MAX_INTENT_AGE_S)
+    # C2 (2026-08-08): concurrent dispatch. Serial `await handle()` head-of-line blocked
+    # the queue behind each ladder (p90 ladder latency 9.7s vs the 10s staleness bound),
+    # so one slow fill aged every intent behind it past the gate. _blocked + the slug
+    # reservation run synchronously at task start (tasks start in creation order), so the
+    # ordering-sensitive gates stay race-free. Per-intent isolation moves to the done
+    # callback: one bad intent must never kill the loop.
+    tasks: set = set()
     while True:
         if _killed(ex.mode):
             log.warning("kill_switch_halt"); break
@@ -904,10 +964,15 @@ async def run_loop(mode):
                 intent = json.loads(line)
             except Exception:
                 continue
-            try:
-                await ex.handle(intent)          # per-intent isolation: one bad
-            except Exception as e:                # intent must never kill the loop
-                log.error("intent_handle_error", err=str(e), line=line[:140])
+            t = asyncio.create_task(ex.handle(intent))
+            tasks.add(t)
+
+            def _reap(t, _line=line[:140]):
+                tasks.discard(t)
+                if not t.cancelled() and t.exception():
+                    log.error("intent_handle_error", err=str(t.exception()), line=_line)
+
+            t.add_done_callback(_reap)
         processed = len(lines)
         try:
             ex.settle_pending()                  # fold resolved windows into the balance
