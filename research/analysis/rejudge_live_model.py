@@ -40,6 +40,7 @@ from research.sim.fills_live import (
 from research.sim.fills_v2 import walk_buy, settle_pnl
 
 OUT = os.path.join("data", "research", "live_gap", "rejudge_live_model.jsonl")
+XBOOK = os.path.join("data", "research", "xbook_15m.parquet")
 _LV = range(1, 11)
 
 # Entry filters mirrored from strategies.yaml (the deployed source of truth).
@@ -75,6 +76,14 @@ CONFIGS = {
                             ask_lo=0.30, ask_hi=0.55, ret_min=5.0),
     "tadiv_approx_ret3_v1": dict(mode="tadiv", t_lo=60, t_hi=300, dist_min=0.0,
                                  ask_lo=0.30, ask_hi=0.55, ret_min=3.0),
+    # xb (added 2026-08-08 so the R1 gate's leg (b) is runnable on 2026-08-20): mirrors
+    # the engine's _xb_entry gate exactly (premium/gap/ref-USD, YES-equivalent DOWN ask,
+    # legs mutually exclusive by gap sign) on the CAUSAL xbook frame (k5_causal rows;
+    # 1s-embargoed 5m book, so if anything slightly stricter than the engine's
+    # same-second read). Rebuild the frame first: uv run python -m research.dataset.xbook
+    "xb_5m15m_causal_v1": dict(mode="xb", t_lo=5, t_hi=300, dist_min=0.0,
+                               ask_lo=0.0, ask_hi=0.90, xb_premium=0.03,
+                               xb_gap_min_bps=2.0, xb_min_ref_usd=1.0),
 }
 
 
@@ -104,6 +113,29 @@ def decisions_for(name: str, b: pd.DataFrame) -> pd.DataFrame:
         m &= ~b["consistent"].fillna(True).astype(bool)
         c = b[m].copy()
         by = (c["dist_strike_bps"] > 0).to_numpy()
+        ud_ask = np.where(by, c["yes_best_ask"].to_numpy("f8"),
+                          1.0 - c["yes_best_bid"].to_numpy("f8"))
+        keep = ((ud_ask >= cfg["ask_lo"]) & (ud_ask <= cfg["ask_hi"])
+                & np.isfinite(ud_ask))
+        c, by, ud_ask = c[keep], by[keep], ud_ask[keep]
+        c["buy_yes"] = by
+        c["entry_ask"] = ud_ask
+    elif cfg["mode"] == "xb":
+        x = pd.read_parquet(XBOOK)
+        x = x[x["k5_causal"].fillna(False).astype(bool)].copy()
+        x["time_left_sec"] = 900 - x["seconds_into_window"]
+        x = x[(x["time_left_sec"] >= cfg["t_lo"]) & (x["time_left_sec"] <= cfg["t_hi"])]
+        # precomputed by xbook: m_15y = yes5_bid - yes15_ask, m_15n = no5_bid - no15_ask
+        # (identical to the engine's ya + premium <= y5b / y5a + premium <= yb forms),
+        # ref_*_usd = notional behind the referenced 5m quote.
+        up = ((x["gap_bps"] >= cfg["xb_gap_min_bps"])
+              & (x["m_15y"] >= cfg["xb_premium"])
+              & (x["ref_15y_usd"] >= cfg["xb_min_ref_usd"]))
+        dn = ((x["gap_bps"] <= -cfg["xb_gap_min_bps"])
+              & (x["m_15n"] >= cfg["xb_premium"])
+              & (x["ref_15n_usd"] >= cfg["xb_min_ref_usd"]))
+        c = x[up | dn].copy()
+        by = (c["gap_bps"] > 0).to_numpy()          # legs mutually exclusive by gap sign
         ud_ask = np.where(by, c["yes_best_ask"].to_numpy("f8"),
                           1.0 - c["yes_best_bid"].to_numpy("f8"))
         keep = ((ud_ask >= cfg["ask_lo"]) & (ud_ask <= cfg["ask_hi"])
