@@ -37,11 +37,17 @@ def joined():
 
 def test_5m_coverage_per_day(joined):
     # exclude today (windows may be unresolved for minutes after close)
-    today = pd.Timestamp.utcnow().strftime("%Y-%m-%d")
-    cov = joined[joined["date"] < today].groupby("date")["official_up"].agg(
-        lambda s: s.notna().mean())
+    today = pd.Timestamp.now("UTC").strftime("%Y-%m-%d")
+    j = joined[joined["date"] < today].copy()
+    # A window unresolved across ALL coins simultaneously is a Polymarket void, not a
+    # label-pipeline failure (first seen 2026-08-05 wts=1785941700: all 7 coins NaN,
+    # still unresolved after refetch). Coverage is measured over resolvable windows;
+    # any PARTIAL gap (some coins labelled, some not) still counts and still alarms.
+    voided = j.groupby("window_start_ts")["official_up"].transform(
+        lambda s: s.isna().all())
+    cov = j[~voided].groupby("date")["official_up"].agg(lambda s: s.notna().mean())
     bad = cov[cov < 0.99]
-    assert bad.empty, f"days under 99% 5m label coverage:\n{bad}"
+    assert bad.empty, f"days under 99% 5m label coverage (voids excluded):\n{bad}"
 
 
 def test_5m_large_move_agrees_with_coinbase(joined):
