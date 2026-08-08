@@ -13,6 +13,7 @@ SINCE=$(date -u -v-3d +%Y-%m-%d 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%d
 
 uv run python -m research.dataset.official_outcomes --timeframes 15m,5m --since "$SINCE"
 uv run python -m research.analysis.resettle_official
+uv run python -m research.analysis.reconcile_executor
 uv run pytest tests/research/test_resettle_official.py -q --no-header 2>&1 | tail -1
 
 echo "[nightly_honest] OK $(date -u +%Y-%m-%dT%H:%MZ)"
