@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -203,6 +204,12 @@ def simulate_config(dec: pd.DataFrame, cfg: dict, mode: str, params, stake: floa
             px = [1.0 - lr[f"bid_px_{i}"] for i in _LV]
             sz = [lr[f"bid_sz_{i}"] for i in _LV]
         ceiling = effective_ceiling(cfg, r.get("cl_dist_bps"))
+        # Outcome is known here (rows without a label were skipped above). Hand it to the
+        # fill model so the zero-fill hazard is drawn ADVERSELY: live misses are not
+        # random, they skew to the winners (lambda 1.42, measured 2026-08-07). Passing it
+        # is a no-op when the params carry adverse_tilt == 1.0, so runs against the
+        # pre-2026-08-07 params file reproduce the old numbers exactly.
+        won = (cl[r["slug"]] == 1) if by else (cl[r["slug"]] == 0)
         if mode == "v2":
             pxa = np.asarray(px, dtype="f8")
             sza = np.asarray(sz, dtype="f8")
@@ -212,11 +219,11 @@ def simulate_config(dec: pd.DataFrame, cfg: dict, mode: str, params, stake: floa
             f = simulate_taker_entry(
                 px, sz, stake, entry_ask=float(r["entry_ask"]), max_ask=ceiling,
                 time_left=float(r["time_left"]), rng=rng, params=params,
-                mode=("guarded" if mode == "live_guarded" else "legacy"))
+                mode=("guarded" if mode == "live_guarded" else "legacy"),
+                wins=bool(won))
         if not f.filled or f.unfilled_usd > stake * 0.5:
             rows.append(dict(slug=r["slug"], split=r["split"], filled=0))
             continue
-        won = (cl[r["slug"]] == 1) if by else (cl[r["slug"]] == 0)
         rows.append(dict(slug=r["slug"], split=r["split"], filled=1, won=int(won),
                          pnl=float(settle_pnl(f, won)),
                          avg_price=float(f.avg_price)))
@@ -238,15 +245,18 @@ def main():
     ap.add_argument("--stake", type=float, default=5.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--only", default=None)
+    ap.add_argument("--params", default=str(DEFAULT_PARAMS_PATH),
+                    help="fill-model params JSON. Point at a pre-2026-08-07 file "
+                         "(adverse_tilt absent => 1.0) to reproduce the old numbers.")
     args = ap.parse_args()
 
-    params = load_params(DEFAULT_PARAMS_PATH)
+    params = load_params(Path(args.params))
     b = load_base()
     out = []
     names = [args.only] if args.only else list(CONFIGS)
     print(f"re-judging {len(names)} configs at ${args.stake:.0f}/trade "
           f"(fill model {params.version}, {params.n_attempts} attempts, "
-          f"kappa={params.kappa})\n")
+          f"kappa={params.kappa}, adverse_tilt={params.adverse_tilt})\n")
     hdr = (f"{'config':18s} {'model':12s} {'sig':>5s} {'fill%':>6s} "
            f"{'EV/fill':>8s} {'CI':>16s} {'WR%':>5s} {'EV/sig':>7s} {'future EV':>20s}")
     print(hdr)

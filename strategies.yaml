@@ -1527,9 +1527,20 @@
 # NOTE: this is also the strategy hype must be armed for on 07-31 — 94% of hype's value is ask>0.45
 # (n=73, +$3.60/fill, CI [+1.81,+5.29]) and only 0.14 sig/day falls in the current live band.
 - id: fav_disagree_hi_live
-  name: "Fav-disagree HI-ASK LIVE ($5/trade real money; tl 120-360s, |dist|>=10bps, buy spot side ask 0.46-0.60, hold; official +$1.80/fill@$10 CI[+0.49,+3.09] n=206; $25/day hard cap, $100 bankroll)"
+  name: "Fav-disagree HI-ASK paper twin (DISARMED 08-07; tl 120-360s, |dist|>=10bps, buy spot side ask 0.46-0.60, hold; lived 13d live at $5: -$26.64, n=19 -$1.402/fill; band proven adversely selected)"
   enabled: true
-  live: true    # DEPLOYED 2026-07-25 (user-approved): the untraded half of the ONE edge that survived honest settlement. Measurement rung at $5; gate 2026-08-07 decides $10. Stop rule (same shape as its sibling): official-settled <= -$0.50/fill with CI-hi<0.
+  live: false   # DISARMED 2026-08-07 (user-approved). Deployed 07-25 to test the untraded ask>0.45 half
+                # of the surviving edge; it lost money over its entire 13-day life (-$26.64, -$2.10/day,
+                # n=19 -$1.402/fill). The 08-07 sizing gate alone said "extend to 08-21" (n=19 < 25 bar),
+                # but the PAIRED calibration gate registered for the same date FAILED: realised hype
+                # fill-rate 35% vs 59% predicted, under the 40% floor. Mechanism then measured, not
+                # guessed: filled-vs-missed counterfactual gap -$4.07/att CI [-6.66,-1.29], i.e. CI clear
+                # of zero. Post-C6 no-fills are 7 above_band / 2 dry, so the books were HEALTHY and
+                # repriced past our 0.60 ceiling between intent and preflight. At ask 0.46-0.60 you buy a
+                # side the book weakly favours: being RIGHT prices you out, being WRONG fills you. It
+                # bleeds on the 4 core coins too (n=10 -$1.760/fill), so it is the BAND, not hype.
+                # enabled stays TRUE on purpose: the paper twin keeps measuring the band forward for the
+                # 08-21 read at zero cost. See STATE.md 2026-08-07 + [[adverse-selection-is-band-dependent]].
   type: determinism
   starting_capital_usd: 100.0
   timeframe: "15m"

@@ -77,10 +77,63 @@ class LiveFillParams:
     knife_rate_legacy: float
     n_attempts: int
     validation: dict = field(default_factory=dict)
+    # lambda = P(no-fill | trade would WIN) / P(no-fill | trade would LOSE). 1.0 = the
+    # pre-2026-08-07 behaviour (hazard independent of outcome). Defaulted so params
+    # files written before the recalibration still load unchanged.
+    adverse_tilt: float = 1.0
+    adverse_tilt_ci: Optional[List[float]] = None
 
     def zero_p(self, depth_ratio: float, time_left: Optional[float]) -> float:
         cell = self.zero_fill_prob.get(_depth_bin(depth_ratio), {}).get(_tl_bin(time_left))
         return float(cell["p"]) if cell else 0.0
+
+    def zero_p_adv(self, depth_ratio: float, time_left: Optional[float],
+                   q_win: float, wins: Optional[bool]) -> float:
+        """Outcome-conditioned zero-fill hazard.
+
+        The binned table gives the MARGINAL hazard p, which is well calibrated (it
+        reproduces the observed overall fill rate). What it cannot express is WHICH
+        attempts miss, and live misses are not random: the shipped pipeline fit over 944
+        labelled live attempts gives P(no-fill | winner) = 0.4634 vs P(no-fill | loser)
+        = 0.3320, so lambda = 1.3959 with a bootstrap CI [1.159, 1.715] that excludes
+        1.0 (out-of-sample holdout 07-01..08-07: 1.463 [1.11, 2.04]). A model that
+        draws the hazard independently of the outcome therefore credits a strategy with
+        its average trade when reality hands it the below-average half. That is the
+        error that let `fav_disagree_hi_live` be promoted at a predicted +$2.03/fill and
+        deliver -$1.40 (2026-08-07 gate day).
+
+        Split p into p_win / p_lose holding the MARGINAL fixed, so overall fill rate
+        (the thing the table is calibrated on) is unchanged:
+
+            q*p_win + (1-q)*p_lose = p        and       p_win = lambda * p_lose
+            =>  p_lose = p / (q*lambda + 1 - q),   p_win = lambda * p_lose
+
+        q is the market-implied win probability, i.e. the price we pay. No new input is
+        needed: buying at ask a pays a to receive 1 on a win, so q = a by construction.
+
+        LIMITATION, stated rather than hidden: q = ask is the BOOK's win probability, not
+        ours. A strategy with genuine edge wins more often than its ask implies, so the
+        marginal is held fixed at the book's q rather than the strategy's true one and the
+        split is slightly off for high-edge cells. Using the strategy's own realized rate
+        instead would mean feeding a backtest its own answer, which is worse. The residual
+        is second-order next to the ~1.4 tilt itself, and it errs toward under-correcting
+        (conservative in the sense that it flatters a candidate less than the old model did,
+        but does not fully penalise it either). Revisit only with a per-strategy fit and a
+        registered forward gate, never by tuning q post hoc.
+
+        `wins=None` returns the marginal p unchanged, so every existing caller and every
+        study that has no outcome to condition on keeps its previous behaviour exactly.
+        """
+        p = self.zero_p(depth_ratio, time_left)
+        lam = float(self.adverse_tilt or 1.0)
+        if wins is None or lam == 1.0 or p <= 0.0:
+            return p
+        q = min(max(float(q_win), 0.0), 1.0)
+        denom = q * lam + (1.0 - q)
+        if denom <= 0:
+            return p
+        p_lose = p / denom
+        return min(max(lam * p_lose if wins else p_lose, 0.0), 1.0)
 
 
 def save_params(params: LiveFillParams, path: Path = DEFAULT_PARAMS_PATH) -> None:
@@ -111,12 +164,21 @@ def simulate_taker_entry(ask_px: Sequence[float], ask_sz: Sequence[float],
                          rng: Optional[np.random.Generator] = None,
                          params: Optional[LiveFillParams] = None,
                          fees: FeeSchedule = DEFAULT_FEES,
-                         mode: str = "guarded") -> Fill:
+                         mode: str = "guarded",
+                         wins: Optional[bool] = None) -> Fill:
     """Taker entry under the deployed executor semantics + live-calibrated frictions.
 
     guarded: band [entry_ask - GUARD_FLOOR_DROP, max_ask]; best ask below the floor
              -> no fill (the executor aborts: the favourite flipped).
     legacy:  band [0.01, max_ask] — reproduces pre-guard knife-catches.
+
+    `wins` is the trade's eventual official outcome. Pass it whenever it is known (a
+    backtest always knows it) so the zero-fill hazard is drawn ADVERSELY rather than at
+    random; see LiveFillParams.zero_p_adv. Leaving it None reproduces the old model
+    exactly, which is why every existing caller is unaffected. Conditioning the hazard
+    on the outcome is NOT look-ahead: it reproduces a measured physical selection effect
+    (the book reprices away from you precisely when you are right), and it can only make
+    a candidate look WORSE, never better.
     """
     if floor is None:
         floor = (entry_ask - GUARD_FLOOR_DROP) if mode == "guarded" else 0.01
@@ -138,7 +200,9 @@ def simulate_taker_entry(ask_px: Sequence[float], ask_sz: Sequence[float],
     target_shares = stake_usd / max(entry_ask, 1e-9)
     depth_ratio = float(sz.sum()) / max(target_shares, 1e-9)
     if params is not None and rng is not None:
-        p_zero = params.zero_p(depth_ratio, time_left)
+        # q = market-implied win prob = the price we pay (entry_ask), clipped to the band.
+        p_zero = params.zero_p_adv(depth_ratio, time_left,
+                                   q_win=min(max(entry_ask, 0.0), 1.0), wins=wins)
         if p_zero > 0 and rng.random() < p_zero:
             return no_fill                   # displayed depth that isn't matchable
         if params.kappa > 0:
@@ -202,6 +266,12 @@ def calibrate_from_frames(attempts: pd.DataFrame,
         "mean_abs_price_err_filled": round(float(
             (clean["avg_price"] - clean["quoted_ask"]).abs().mean()), 4) if len(clean) else None,
     }
+    tilt, tilt_ci = 1.0, None
+    if "won" in att.columns:
+        lab = att[att["won"].notna()]
+        tilt, tilt_ci, diag = _fit_adverse_tilt(lab)
+        validation["adverse_tilt"] = diag
+
     return LiveFillParams(version=version,
                           calibration_window=window,
                           zero_fill_prob=table,
@@ -210,7 +280,60 @@ def calibrate_from_frames(attempts: pd.DataFrame,
                           mean_slip_filled=round(mean_slip, 4),
                           knife_rate_legacy=round(knife_rate, 4),
                           n_attempts=int(len(att)),
-                          validation=validation)
+                          validation=validation,
+                          adverse_tilt=tilt,
+                          adverse_tilt_ci=tilt_ci)
+
+
+def _fit_adverse_tilt(lab: pd.DataFrame, n_boot: int = 20000, seed: int = 0):
+    """lambda = P(no-fill | winner) / P(no-fill | loser), with a bootstrap 95% CI.
+
+    Deliberately ONE global number rather than a per-band table. The per-band pipeline
+    fit (2026-08-07: ask 0.00-0.45: 1.03, 0.45-0.60: 1.60, 0.60-0.75: 2.65,
+    0.75-1.00: 1.17) has 3 of 4 bands' CIs overlapping the global 1.3959, so a per-band
+    table would be fitting noise in three cells to chase one. The band numbers are kept
+    in `validation` as diagnostics for a future session with more data, NOT used.
+    Falls back to 1.0 (old behaviour) whenever either arm is too thin to fit.
+    """
+    if lab.empty:
+        return 1.0, None, {"n": 0, "note": "no labelled attempts"}
+    filled = (~lab["zero"]).astype(float).to_numpy()
+    won = lab["won"].astype(bool).to_numpy()
+    w, l = filled[won], filled[~won]
+    if len(w) < 5 or len(l) < 5:
+        return 1.0, None, {"n": int(len(lab)), "n_win": int(len(w)), "n_lose": int(len(l)),
+                           "note": "too thin to fit; tilt left at 1.0"}
+    p_nofill_win, p_nofill_lose = 1.0 - w.mean(), 1.0 - l.mean()
+    if p_nofill_lose <= 0:
+        return 1.0, None, {"n": int(len(lab)), "note": "no losing-side misses; tilt 1.0"}
+    lam = float(p_nofill_win / p_nofill_lose)
+    rng = np.random.default_rng(seed)
+    draws = []
+    for _ in range(n_boot):
+        pw = 1.0 - rng.choice(w, len(w), replace=True).mean()
+        pl = 1.0 - rng.choice(l, len(l), replace=True).mean()
+        if pl > 0:
+            draws.append(pw / pl)
+    ci = None
+    if draws:
+        d = np.sort(draws)
+        ci = [round(float(d[int(0.025 * len(d))]), 4), round(float(d[int(0.975 * len(d))]), 4)]
+    diag = {"n": int(len(lab)), "n_win": int(len(w)), "n_lose": int(len(l)),
+            "p_nofill_win": round(float(p_nofill_win), 4),
+            "p_nofill_lose": round(float(p_nofill_lose), 4),
+            "lambda": round(lam, 4), "ci95": ci,
+            "excludes_1.0": bool(ci and ci[0] > 1.0)}
+    if "quoted_ask" in lab.columns:            # diagnostics only, never used by the model
+        by_band = {}
+        for lo, hi in ((0.0, 0.45), (0.45, 0.60), (0.60, 0.75), (0.75, 1.0)):
+            g = lab[(lab["quoted_ask"] >= lo) & (lab["quoted_ask"] < hi)]
+            gw = (~g["zero"]).astype(float)[g["won"].astype(bool)]
+            gl = (~g["zero"]).astype(float)[~g["won"].astype(bool)]
+            if len(gw) >= 5 and len(gl) >= 5 and gl.mean() < 1.0:
+                by_band[f"{lo:.2f}-{hi:.2f}"] = {
+                    "n": int(len(g)), "lambda": round(float((1 - gw.mean()) / (1 - gl.mean())), 4)}
+        diag["by_ask_band_diagnostic_only"] = by_band
+    return round(lam, 4), ci, diag
 
 
 def _build_attempt_frame(live_dir: Path, jsonl_root: Path) -> pd.DataFrame:
@@ -222,6 +345,14 @@ def _build_attempt_frame(live_dir: Path, jsonl_root: Path) -> pd.DataFrame:
     intents = load_intents(Path(live_dir) / "intents.jsonl")
     fills = load_fills(Path(live_dir) / "fills.jsonl",
                        valid_sids=set(intents["strategy_id"]))
+    # Official on-chain outcome per slug, for the adverse-tilt fit. Missing labels stay
+    # NaN and are simply excluded from the fit (never imputed) — same rule the honest
+    # settlement pipeline uses.
+    try:
+        _off = pd.read_parquet(REPO / "data" / "research" / "official_outcomes.parquet")
+        official = dict(zip(_off["slug"], _off["official_up"]))
+    except Exception:
+        official = {}
     it = intents.set_index(["strategy_id", "slug"])
     rows = []
     # group needed slugs by symbol; pull each symbol's L2 once over the full span
@@ -262,9 +393,12 @@ def _build_attempt_frame(live_dir: Path, jsonl_root: Path) -> pd.DataFrame:
                                 and 0 < p <= ceiling + 1e-9)
             lat_s = float(f.get("latency_ms") or 0.0) / 1000.0
             pickup = max(0.0, float(f["ts"]) - float(i["ts_ms"]) / 1000.0 - lat_s)
+            up = official.get(f["slug"])
+            won = (np.nan if up is None or not np.isfinite(float(up))
+                   else bool(float(up) == 1.0) == (str(f.get("side")) == "UP"))
             rows.append({
                 "strategy_id": f["strategy_id"], "slug": f["slug"],
-                "ok": bool(f.get("ok")),
+                "ok": bool(f.get("ok")), "won": won,
                 "filled_shares": float(f.get("filled_shares") or 0.0),
                 "target_shares": target,
                 "depth_band_shares": depth,

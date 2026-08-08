@@ -1137,3 +1137,271 @@ cohort re-enters at fill time. It is an enforcement gap in a validated guard, no
 Why this could matter more than a sizing rung: on the three armed books the normal-fill cohort
 is **+$74.33** while the knife cohort is **-$27.78**. If forward data confirms, the live book's
 sign flips on execution alone, with no new edge and no extra risk.
+
+### GATE DAY 2026-08-07 SCORED: six gates, ZERO new arming (R4 dropped, leg-2 method quarantined)
+
+All six ran verbatim through `research/analysis/score_gates.py` (the registered calculator).
+Official labels, nightly fresh 2.0h before the reads (max label date 08-07). No band iteration,
+no window swapping, no re-cutting after seeing a result.
+
+| gate | registered command | result | branch taken |
+|---|---|---|---|
+| R1 xb live-promotion | `paper --sids xb_5m15m_causal_v1 --since 2026-07-24 --until 2026-08-06` | leg (a) n=188 **+$1.428/fill CI [+0.05,+2.86]** WR 67% | **EXTEND 2wk -> 2026-08-20** (leg b unrunnable, see below) |
+| R2 widening cell | `paper --sids fav_disagree_d5 --minus-sids fav_disagree --ask-band 0.30,0.45 --since 2026-07-24 --until 2026-08-07` | n=68 +$0.920/fill **CI [-2.10,+3.93]** WR 46% | **NO PROMOTION** (CI-lo<0; not killed: EV>0, CI-hi>0) |
+| R4 hour gate h16-19 | `paper --sids fav_disagree --hours 16,17,18,19 --since 2026-07-24 --until 2026-08-07` | n=15 **+$1.744/fill** CI [-2.88,+5.88] WR 67% | **DROP PERMANENTLY** (rule: EV<0 AND CI-hi<0 required; EV is POSITIVE) |
+| fav_disagree_hi_live $10 rung | `live --sid fav_disagree_hi_live --since 2026-07-25 --until 2026-08-07` | n=19 (<25) -$1.402/fill CI [-3.28,+0.60] WR 37% per-$ -0.309, fill-rate 19/41=46% | **EXTEND ONCE -> 2026-08-21** (n<25; KILL legs not met) |
+| hype fill-rate calibration | fills.jsonl, hype x fav_disagree_hi_live since arming 07-26 | **9/26 = 35%** realised vs **59% predicted**, floor 40% | **MATERIAL MISS -> leg-2 guarded-fill method QUARANTINED for arming** |
+| xh5y_g2_v1 14-day twin | `paper --sids xh5y_g2_v1 --since 2026-07-24 --until 2026-08-07` | n=102 +$1.084/fill **CI [-0.93,+3.26]** WR 60% | **NO LIVE TALK**, twin keeps running, next look 2026-08-21 |
+
+**R4 is closed for good.** Its own registration said "anything else => drop (do NOT iterate hour
+bins, one look only)". EV came out POSITIVE (+$1.744), the opposite of the hypothesis. No
+hour-exclusion knob gets built. This is the weakest-prior hypothesis of the campaign dying exactly
+as pre-registered, which is the discipline working.
+
+**Why R1 did NOT pass despite leg (a) clearing.** The registration requires BOTH legs; leg (b) is
+"live-2 guarded fill model on recorded decisions >= +$0.50/fill". Two independent blockers:
+1. `rejudge_live_model.CONFIGS` has NO xb entry (its mode vocabulary is consistent/disagree/tadiv;
+   xb is a cross-book 15m-vs-co-terminal-5m rule). Same class of limitation the 07-26 hype leg-2
+   note already recorded. Leg (b) is not runnable with registered tooling today.
+2. The leg-2 METHOD failed its own calibration gate the same morning (hype row above). The
+   registered consequence is explicit: a material miss "means the guarded model over-credits thin
+   books and the whole leg-2 method needs re-calibration **before it is used to arm anything
+   else**." Arming xb live is precisely "arming something else".
+Leg (a) is also thin on its own: CI-lo is **+$0.05**. Branch taken is the registered else: extend
+2 weeks once, to **2026-08-20**. Nothing armed.
+
+**The hype calibration miss is NOT thin books.** The C6 `above_band` split (shipped 08-03, first
+gate day it could be read) resolves the mechanism. Post-C6 hype no-fills: **7 above_band, 2 dry,
+1 abort_floor**. `above_band` means best_ask > ceiling at preflight while the intent-time
+quoted_ask was 0.48-0.59, i.e. the book repriced ABOVE 0.60 in the gap between intent and
+preflight. The book ran away from us; it was not empty. So the guarded model does not over-credit
+because it misjudges depth. It over-credits because it draws the zero-fill hazard RANDOMLY while
+real misses are adversely selected. That limitation was STATED when the model was used on 07-26
+("treat +$2.03 as an OPTIMISTIC bound"); it is now measured.
+
+### CONFIRMATION (not a new claim): execution adverse selection, CI clear of zero on 2/3 armed books
+
+Method is the one already registered for R3 (counterfactual EV on misses at the quoted ask,
+official labels), applied to the registered question the hype gate asks. Status: this CONFIRMS
+[[live-execution-gap-decomposed]] ("the misses ARE the winners", 2026-06-10) with better
+instrumentation. It is NOT pre-registered and NOTHING ships off it today.
+
+Filled vs missed counterfactual, per attempt, 20k-resample bootstrap on the difference:
+
+| book | filled | missed | gap (filled - missed) | verdict |
+|---|--:|--:|--:|---|
+| `fav_disagree_hi_live` | n=19 **-$1.44** | n=23 **+$2.64** | **-$4.07 CI [-6.66,-1.29]** | ADVERSE, CI clear of 0 |
+| `det_lwd_live` | n=423 +$0.02 | n=394 +$0.54 | **-$0.52 CI [-0.84,-0.20]** | ADVERSE, CI clear of 0 |
+| `fav_disagree_live` | n=53 **+$1.36** | n=42 +$0.87 | +$0.49 CI [-3.55,+4.60] | spans 0, NOT adverse |
+
+Per-$ by ask band, three armed books pooled (filled minus missed): 0.05-0.45 **-0.260**;
+0.45-0.60 **-0.396**; 0.60-0.75 **-0.373**; 0.75-0.90 -0.056. The penalty is worst in the
+0.45-0.75 zone and mildest at the extremes.
+
+**This falsifies the 07-25 volume-harvest premise for the >0.45 band specifically.** That round
+argued coverage was the binding constraint because the twin discards ~78% of its own signal at
+max_ask 0.45. `fav_disagree_hi_live` was the registered test of exactly that band, and the
+discarded signal turns out not to be harvestable by our taker: at ask 0.46-0.60 you buy a side the
+book weakly favours, so when you are RIGHT the book reprices past the ceiling before the ladder
+lands (miss) and when you are WRONG it sits there and you fill. hi_live bleeds on the 4 core coins
+too (n=10 -$1.760/fill), so this is the BAND, not hype. Amends [[profitability-improvement-levers]]:
+coverage beats discovery only where the book is slow to reprice, which is the cheap disagree band.
+
+`fav_disagree_live` (ask 0.05-0.45) is the one book with no measurable adverse selection and the
+only profitable one. Descriptive, on the virgin era rather than its registered window: n=32
++$4.169/fill CI [+0.06,+8.35], per-$ +0.450 CI [+0.01,+0.90]. **NOT a gate read.** Its registered
+window and next look are unchanged at 2026-08-17; the window is NOT swapped to manufacture a pass.
+
+**Registered forward gate for any action derived from the above: 2026-08-24** (co-scheduled with
+the knife-fill gate, same ledger, same discipline). On forward fills only, official labels,
+slug-clustered 95% CI: the adverse-selection gap is actionable iff it reproduces with **n>=25 per
+book AND CI-hi < 0**. Otherwise it stays a documented execution property and no config moves.
+Any real-money change needs user sign-off.
+
+DISPOSITION: R2 reached n>=40 and failed CI-lo>0 without meeting either KILL leg, so it has no
+registered terminal branch. Registered now: R2 gets ONE more look on 2026-08-21 (same command,
+`--until 2026-08-21`); if CI-lo is still <=0 at that read it is DROPPED permanently, no third look
+and no band re-cut.
+
+### 2026-08-07 (same day, post-gate): hi_live DISARMED + two promotion-relevant findings
+
+**ACTION TAKEN (user-approved).** `fav_disagree_hi_live` set `live: false` in strategies.yaml,
+`enabled: true` retained so the paper twin keeps measuring the band forward at zero cost. Engine
+bounced in the intent dead zone (min 0 of window, 05:45 UTC); executor pids unchanged (4676/4678),
+real money untouched; 17 strategies reloaded, heartbeat 4s, queue 0. Armed set is now exactly
+{`det_lwd_live` $2, `fav_disagree_live` $10}. This OVERRIDES the registered "extend to 08-21"
+branch, on the grounds recorded above: the paired calibration gate for the same date failed and
+the mechanism is measured with a CI clear of zero. Registered so the override is auditable, not
+silent. `EXEC_SYMBOLS_EXTRA=fav_disagree_hi_live:hype` left in place but now INERT (no intents from
+a paper sid); do not re-arm the sid without re-reading this entry.
+
+**FINDING A — the paper leaderboard systematically overstates live-promotable value.** Of the 17
+enabled strategies, **10 sit entirely in the ask 0.50-0.90 band** now shown to be adversely
+selected, and 4 more straddle it. Only 3 live in the cheap harvestable band (`fav_disagree_live`,
+`early_disagree_live`, `early_disagree_v1`). The adverse-band books share the tell: WR 77-86% with
+small payoffs, i.e. buying favourites, which is exactly the profile that gets picked off at fill
+time. Any future promotion shortlist must be band-filtered BEFORE it is ranked by total dollars.
+
+**FINDING B — R1's entire edge is in the adverse band. Registered prediction for the 08-20 read.**
+Splitting `xb_5m15m_causal_v1` on the R1 forward window by entry ask:
+
+| band | n | EV/fill | CI | WR |
+|---|--:|--:|---|--:|
+| ask 0.00-0.45 | 58 | **+$0.021** | [-3.70,+3.91] | 36% |
+| ask 0.45-0.90 | 137 | **+$1.700** | [+0.55,+2.86] | 78% |
+
+**100% of xb's value sits above 0.45**, at WR 78% with small payoffs: the same shape that produced
+hi_live's -$26.64. Leg (b) is precisely the check that should catch this, and leg (b) is the
+quarantined method. PREDICTION, registered now so 08-20 can falsify it: if xb is ever armed
+unmodified it will underperform its paper EV by roughly the hi_live margin. Recommended amendment
+to the R1 PASS branch, to be decided at 08-20 and NOT applied retroactively: any xb promotion is
+band-restricted or does not happen. No iteration on the cut; 0.45 is the already-frozen boundary
+from the hi_live design, not a new free parameter.
+
+**FINDING C — `early_disagree_live` is the only genuine promotion candidate on the board.**
+Cheap band (0.30-0.45), tl 450-900s. Official paper: virgin n=392 **+$0.709/fill CI [+0.11,+1.32]**
+(CI-lo>0), last 30d n=183 **+$1.131/fill CI [+0.23,+2.03]** (improving, CI-lo>0). Jaccard **0.039**
+vs `fav_disagree` = genuinely additive, not a re-slice. Arrival ~6-8 signals/day against
+`fav_disagree_live`'s ~1.5/day, so it is the only candidate that could materially raise live
+volume. It already HAS a live book from before its 06-18 demotion: n=32 fills, +$10.76,
+**+$0.336/fill CI [-1.64,+2.40], per-$ +0.070 CI [-0.35,+0.50]**, fill-rate 32/66 = 48%.
+Adverse-selection check: gap -$1.32 CI [-4.21,+1.62], **spans zero, NOT proven adverse** (contrast
+hi_live's [-6.66,-1.29]).
+**NOT ARMED TODAY.** Its own live per-$ CI spans zero at n=32, and the method we would use to
+predict its live behaviour is quarantined as of this morning. Registered ordering: recalibrate the
+leg-2 fill model (adversely-selected hazard instead of random) FIRST, then re-score this candidate,
+then arm at $5 with a registered stop rule. Arming it before the recalibration would repeat the
+exact sequence that produced hi_live. Gate date **2026-08-21** if the recalibration has not shipped
+by then; user sign-off required either way.
+
+**NOT DONE, deliberately: `fav_disagree_live` was NOT sized up.** The 08-03 gate scored this exact
+question four days ago (per-$ +0.422 CI [-0.05,+0.88], both CIs span zero, branch = extend at $10,
+next look 08-17) and its own rule says we do not size up on a CI that spans zero. No extra look was
+taken at that window today: re-scoring a gate early inflates its false-positive rate, and the
+favourable 30d slice (+$6.63/fill on 25 fills) is exactly the kind of number that would manufacture
+one. Capital is not the binding constraint anyway ($675.60 available against $200 allocated across
+two books); statistical confidence is. Pre-commitment: at 08-17, if BOTH CIs clear zero, go $10 to
+$15 mechanically.
+
+### 2026-08-07 (evening): LEG-2 FILL MODEL RECALIBRATED — quarantine LIFTED
+
+The quarantine declared this morning is closed by fixing the defect it named, not by
+waiving it. `research/sim/fills_live.py` drew the zero-fill hazard independently of the
+trade's outcome; live misses are adversely selected.
+
+**THE PARAMETER.** lambda = P(no-fill | winner) / P(no-fill | loser), fitted on 944
+labelled live attempts inside the calibration window:
+
+    lambda = 1.3959   CI95 [1.159, 1.715]   (excludes 1.0)
+    P(no-fill | WIN) = 0.4634   vs   P(no-fill | LOSE) = 0.3320
+
+Two independent code paths agree: an ad hoc read over all 1425 labelled attempts gives
+1.418 [1.22,1.66], the pipeline's own fit gives 1.3959. Params bumped **live-2 -> live-3**
+(947 attempts, 2026-06-12..2026-08-07, kappa 0.953, overall fill rate 0.5702). The old
+file is preserved at `data/research/fill_model_live.pre_tilt_20260807.json`.
+
+**OUT-OF-SAMPLE VALIDATION (this is the leg that matters — an in-sample tilt proves
+nothing).** Split the attempt stream chronologically:
+
+| slice | window | n | lambda | CI95 |
+|---|---|--:|--:|---|
+| fit (first 70%) | 06-05..07-01 | 997 | 1.399 | [1.18, 1.69] |
+| **holdout (last 30%)** | 07-01..08-07 | 428 | **1.463** | **[1.11, 2.04]** |
+| all | 06-05..08-07 | 1425 | 1.418 | [1.22, 1.66] |
+
+The holdout CI still excludes 1.0 and its point estimate is if anything HIGHER than the
+fit. By month: Jun 1.400, Jul 1.545, Aug 1.091 (n=47, too thin to read). The tilt is a
+stable property of our execution, not a fitted artifact.
+
+**DESIGN, and what was deliberately NOT built.** The split holds the MARGINAL hazard
+fixed (`q*p_win + (1-q)*p_lose = p`, `p_win = lambda*p_lose`), so the binned table still
+reproduces the observed 57% overall fill rate and only WHICH attempts miss changes. q is
+the market-implied win probability = the ask, so no new input is needed. ONE global
+lambda, not a per-band table: the per-band fit (0.00-0.45: 1.03, 0.45-0.60: 1.60,
+0.60-0.75: 2.65, 0.75-1.00: 1.17) is stored in `validation` as a DIAGNOSTIC only, because
+3 of 4 band CIs overlap the global and a table would be fitting noise in three cells to
+chase one. Stated limitation, in the docstring rather than hidden: q is the BOOK's win
+probability, not ours, so the split under-corrects for genuinely high-edge cells; using
+the strategy's own realized rate would feed a backtest its own answer and is worse.
+`wins=None` reproduces the old model EXACTLY, so all six existing call sites are
+unaffected, and old params files without the key load at 1.0. Tests:
+`tests/research/test_fills_live_adverse_tilt.py` (10, incl. marginal preservation, an
+end-to-end filled-cohort-WR drop, planted-lambda recovery, and backwards compatibility).
+36/36 green across fills_live, fills_v2, score_gates, rejudge_live_model.
+
+**RE-SCORE: `early_disagree_live` survives the harsher test.** Same config, same seed,
+$5, live_guarded; the only difference is the params file:
+
+| model | fill% | EV/fill | CI | WR% | future EV |
+|---|--:|--:|---|--:|---|
+| OLD live-2 (tilt 1.0) | 38.4% | **+$2.024** | [1.48, 2.63] | 58.4 | +$1.530 [0.82, 2.19] |
+| NEW live-3 (tilt 1.396) | 40.1% | **+$1.277** | [0.74, 1.83] | 52.9 | +$1.065 [0.39, 1.72] |
+
+The correction removes **37%** of the predicted EV and 5.5pp of the predicted win rate.
+The idealized `v2` row is bit-identical at +$1.772 in both runs, confirming nothing but
+the hazard moved. It still clears the registered leg-2 bar (>= +$0.50/fill, CI-lo > 0).
+
+**HONEST RESIDUAL, recorded because it bounds what this fix bought.** The corrected model
+predicts +$1.277/fill where `early_disagree_live`'s REAL book delivered +$0.336/fill
+(n=32). The recalibration narrowed the model-vs-reality gap but did NOT close it: the
+model is still ~4x optimistic on this book. Do not quote +$1.277 as an expectation. The
+honest planning number for any arming decision is the realized +$0.34/fill, i.e. ~+$1/day
+at 3 fills/day, and the model's role is a GATE (does it clear +$0.50 under the harsher
+physics) not a forecast. Residual sources not addressed here: the q-limitation above, and
+whatever selection remains beyond the single global lambda.
+
+**STATUS OF THE MORNING'S BLOCKERS.** R1/xb is still NOT unblocked: its leg (b) needs an
+xb config in `rejudge_live_model.CONFIGS`, which does not exist, and FINDING B stands
+(100% of xb's value sits in the adverse band). The 08-20 date is unchanged. What IS
+unblocked is `early_disagree_live`, which now has a leg-2 pass under the corrected model.
+Arming it remains a real-money decision requiring user sign-off; nothing was armed.
+
+### 2026-08-07 AMENDMENT to FINDING C — early_disagree_live NOT armed; the edge is hype, not the live universe
+
+User said deploy. **The deploy was NOT executed**, because the pre-arm coin check (the one the
+07-26 hype capacity gate exists to force) invalidated the premise of the recommendation.
+
+FINDING C quoted `early_disagree_live` at virgin +$0.709/fill CI [+0.11,+1.32] and last-30d
++$1.131 CI [+0.23,+2.03], both CI-lo>0. Those are **all-7-coin** numbers. The live executor
+trades btc/eth/sol/xrp. Decomposed:
+
+| slice | n | EV/fill | CI | WR |
+|---|--:|--:|---|--:|
+| **4 live coins, virgin** | 329 | **+$0.435** | **[-0.21, +1.09]** | 47% |
+| **4 live coins, last 30d** | 120 | **+$0.602** | **[-0.52, +1.68]** | 48% |
+| all 7, virgin | 392 | +$0.709 | [+0.11, +1.32] | 49% |
+
+Per coin (virgin): btc n=26 **-$1.748** [-3.86,+0.66] WR 27%; eth n=81 +$1.147 [-0.08,+2.40];
+sol n=151 +$0.452 [-0.50,+1.43]; xrp n=71 +$0.387 [-1.08,+1.87]; doge n=24 +$0.790
+[-1.64,+3.18]; bnb n=1; **hype n=38 +$3.185 [+1.31,+4.92] WR 68% — the ONLY coin whose CI
+clears zero.** The 3 unarmed coins pooled: n=63 +$2.139 [+0.67,+3.62].
+
+**So the CI-lo>0 headline is carried by hype, a coin this strategy is not armed for, and on the
+tradeable universe every single coin's CI spans zero with btc actively negative.** Arming it on
+btc/eth/sol/xrp would deploy a book with no measured edge — the precise error this project made
+with `fav_disagree_hi_live`, diagnosed nine hours earlier in this same ledger. This is also the
+second time the same shape has appeared: the 07-25 amendment recorded that the 07-31 capacity
+gate "as originally written would have passed and deployed ~nothing" because fav_disagree's hype
+value was all in a band the live book excluded. Same trap, different axis.
+
+PROCESS NOTE, recorded so the check becomes automatic: FINDING C was written from a pooled
+all-coin score and the coin decomposition was only run at the arming step. **Any future promotion
+shortlist must be decomposed by EXECUTABLE COIN SET before it is proposed, not before it is
+armed.** A pooled score over a universe wider than the executor's allowlist is not a promotion
+metric. Same class of error as ranking the paper leaderboard by dollars before band-filtering it
+(FINDING A, same day).
+
+REGISTERED, not acted on: the hype slice (n=38, +$3.185/fill, CI [+1.31,+4.92], official labels)
+is a genuine candidate but is a post-hoc per-coin cut of a strategy proposed for other reasons
+today, so it ships nothing now. It also inherits a KNOWN adverse condition: the 08-07 hype
+fill-rate gate FAILED (35% realised vs 59% predicted). One countervailing observation, registered
+as a hypothesis and NOT as a claim: that miss was concentrated in `above_band` at ask 0.46-0.60,
+whereas early_disagree sits at 0.30-0.45 where the measured tilt is lambda 1.03 (no adverse
+selection), so the hype fill problem may be BAND-specific rather than coin-specific.
+**Gate 2026-08-28.** Requires, on forward data only: early_disagree hype fills n>=25 AND official
+CI-lo>0 AND realised hype fill-rate >=40% in the 0.30-0.45 band. All three, or the grant is
+dropped permanently. No re-cutting the coin set or the band after seeing the result. Needs user
+sign-off; it is a real-money grant via `EXEC_SYMBOLS_EXTRA`.
+
+ARMED SET UNCHANGED: {det_lwd_live $2, fav_disagree_live $10}. No config was modified, no restart
+was performed for this item.
