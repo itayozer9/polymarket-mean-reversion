@@ -165,10 +165,20 @@ class MarketDiscovery:
                 now_active[slug] = m
             # else: future window (k>0) — leave start_price=0.0 until it opens.
 
-        # 3) detect closes (slugs that disappeared OR whose window_end_ts < now)
+        # 3) detect closes: SOLELY on the window's own clock.
+        #
+        # Absence from `now_active` is deliberately NOT a close trigger. Gamma
+        # reachability is not evidence about a window: when DNS died on 2026-08-09
+        # every `_market_by_slug` probe raised, `list_active_markets` returned [],
+        # and the old `slug not in now_active` clause force-settled all 28 in-flight
+        # markets with no price basis AND blacklisted them in `_closed_slugs`. That
+        # blacklist is permanent and `candidate_window_starts` only offers
+        # k in {-1,0,1,2}, so the current and next 15m windows became unrecoverable
+        # (3 lost windows, 43 min of rows_written=0, heartbeat green throughout).
+        # A window Polymarket voids early just settles one poll after its end_ts.
         closed = []
         for slug, m in list(self._active.items()):
-            if slug not in now_active or m.window_end_ts <= now:
+            if m.window_end_ts <= now:
                 closed.append(m)
         for m in closed:
             self._active.pop(m.slug, None)
@@ -205,7 +215,17 @@ class MarketDiscovery:
 
         # 4) update active set — exclude anything closed this poll so it is never
         # carried forward and re-closed next poll (close fires exactly once per window).
-        self._active = {s: m for s, m in now_active.items() if s not in self._closed_slugs}
+        #
+        # Still-open windows this poll did not return are CARRIED FORWARD rather than
+        # dropped: a failed/partial Gamma poll must not un-track a live window (that
+        # is what churned active_markets 28->14 and books 74->42 on 2026-08-09, tearing
+        # down WS subscriptions mid-window). Carried entries are bounded: step 3 closes
+        # every window on its own clock, and the blacklist filter below drops it then.
+        # `now_active` overlays, so a fresh Gamma doc always wins over a stale one.
+        self._active = {
+            s: m for s, m in {**self._active, **now_active}.items()
+            if s not in self._closed_slugs
+        }
 
         # 5) compute new asset_id set; if changed, callback
         new_subs = set()

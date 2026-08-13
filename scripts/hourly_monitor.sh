@@ -62,4 +62,10 @@ if [ -n "$(find "$REPO/data/research/paper_official/daily_scores.parquet" -mtime
   echo "[warn] paper_official labels STALE (>26h) — nightly_honest may be dead. Gates and the §5 paper table are scoring on old labels. Run: ./scripts/nightly_honest.sh"
 fi
 
+# 7) Collector liveness. The heartbeat, the pid and active_markets can ALL look healthy
+#    while zero tick rows are written: on 2026-08-09 a DNS outage made discovery mass-settle
+#    every live window and the feed went dark for 43 min with a 1s heartbeat. Same silent
+#    shape as the Chainlink outage in (5), so it gets the same treatment.
+"$REPO/scripts/check_collector_liveness.sh" "$REPO/logs/combined.log"
+
 echo "----- done -----"
