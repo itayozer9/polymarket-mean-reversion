@@ -4,6 +4,78 @@
 
 ---
 
+## 2026-08-13 - C2 deployed; the coin-grant question answered (and my recommendation reversed)
+
+Acted on the two standing blockers. One shipped; the other turned out to be based on a
+premise I had repeated wrongly for three status checks.
+
+**C2 DEPLOYED** (the 08-09 slip closed, 5 days late). The precondition was "diff the soak",
+and earlier sessions recorded the soak as DOWN with an empty dir -- that was wrong: the soak
+was alive the whole time, it just matches the same `live_executor.py --live` pgrep pattern as
+the live executor, so it was miscounted as one process. The diff is clean and exact: across
+all 3 windows the soak saw (xrp 1786349700, btc 1786541400, eth 1786543200) C2 produced
+IDENTICAL decisions to the running 08-03 build -- same side, same quoted_ask, same
+target_shares, same slug set. Deployed via restart_executor.sh at 18:45 IDT in the dead zone;
+ok-fills unchanged at 772 (backlog replay placed no orders), C1 counters verified
+(replaying=0, skipped_stale=2018). Now live: GLOBAL_MAX_CONCURRENT=3, PER_STRAT=2, the
+one-position-per-(window,direction) macro-correlation cap, reserve-before-await.
+
+**The 08-10 incident fixes are committed** (25703d1): discovery closes on the window clock
+only, open windows carry forward across a failed poll, plus the collector-liveness alarm in
+hourly_monitor. 9 tests.
+
+**bnb/doge do NOT pass rule 2 -- do not grant them.** I had been calling the bnb/doge
+allowlist "the ladder blocker" since 08-10 on the strength of their 07-31 capacity gate. The
+per-coin decomposition that rule 2 actually requires says otherwise (fav_disagree_live,
+official labels, since 06-19):
+
+| coin | n | EV/fill | CI | WR |
+|---|--:|--:|---|--:|
+| eth | 45 | +$4.516 | [+1.35,+7.81] | 62% |
+| sol | 49 | +$2.586 | [+0.07,+5.15] | 61% |
+| xrp | 29 | +$2.291 | [-1.05,+5.57] | 62% |
+| btc | 14 | -$1.458 | [-6.69,+4.41] | 36% |
+| **bnb** | **5** | **-$0.664** | **[-10.43,+9.10]** | **40%** |
+| **doge** | **7** | **-$2.492** | **[-10.44,+7.40]** | **29%** |
+| **hype** | **17** | **+$8.813** | **[+2.37,+14.72]** | **71%** |
+
+bnb and doge are negative point estimates on n=5/n=7. The 07-31 capacity gate was about
+data-collection viability, not EV; treating it as an arming credential was my error.
+
+**hype is the coin that passes on EV -- and it fails on execution.** Paper is strong and
+corroborated: the wider twin `fav_disagree` on hype is n=138, +$4.057/fill, CI[+2.57,+5.48],
+WR 75%, with BOTH time-halves CI-lo>0 (07-15..08-01 n=98 +$2.756; 08-01..now n=40 +$7.247),
+and both cheap-band sub-bands positive. But the 26 REAL hype orders on the live book (all
+from the hi_live grant) say:
+- fill rate **9/26 = 35%**, under the ladder's 45% bar
+- recorded in-band depth_band **median 0**, max 212 (vs 264 xrp / 5047 btc on our fills)
+- filled EV -$1.711/fill (WR 44%) vs missed EV +$4.798/fill CI[+0.61,+8.45] (WR 76%)
+- **filled-minus-missed = -$6.509/order**: the fills we get are the losers
+
+That is the 08-07 adverse-selection signature. CAVEAT that keeps the door open: all 26 of
+those orders are ask 0.47-0.59, i.e. inside the ALREADY-CLOSED >0.45 band, so this
+re-confirms rule 1 on hype rather than condemning the cheap band. We have ZERO real hype
+orders at ask <= 0.45.
+
+**Therefore: no coin granted today.** Instead the C2 soak was repurposed into a HYPE COVERAGE
+SOAK -- `EXEC_SOAK_DIR=data/live/soak_hype` with
+`EXEC_SYMBOLS_EXTRA="fav_disagree_live:hype,fav_disagree_hi_live:hype"` passed as process env
+(verified: env beats .env under load_dotenv, so the LIVE executor's grant is unchanged and
+.env is untouched). Dry-run, zero risk. It records real preflight depth and would-fill
+decisions on cheap-band hype books, which is the exact evidence rule 2 wants and the only way
+to get it without spending money. hype throws ~2 signals/day, so a week gives n~14.
+
+**Consequence for the 08-17 rung read:** it will be unsampleable, not negative.
+fav_disagree_live has 56 lifetime fills and added ONE since 08-10. The mechanical outcome is
+"no rung change, stay at $10" -- record it as insufficient sample, NOT as an EV failure, or
+the ladder inherits a false negative.
+
+**Next:** (1) read the hype soak ~08-20 for cheap-band fill-rate + depth; if it clears 45%
+with non-zero depth, that is the rule-2 evidence for a real grant, and it needs user sign-off
+per rule 8. (2) 08-15 Edge Hunt v4 reveal. (3) 08-17 rung read, per above. (4) The soak is
+unsupervised by design (temporary); a reboot kills it.
+
+
 ## 2026-08-08 - CONSOLIDATION DAY: doctrine adopted, det retired, C2 shipped, freeze declared
 
 The user reviewed everything and ratified a consolidation plan (session
