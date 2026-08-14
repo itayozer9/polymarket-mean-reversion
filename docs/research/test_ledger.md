@@ -1489,3 +1489,51 @@ frame (`uv run python -m research.dataset.xbook` first). It is however fully con
 with FINDING B (all of xb's paper value sits in the closed >0.45 band) and with the
 registered terminal default: **xb does not arm as taker unless the 08-20 rebuild
 contradicts both legs of today's evidence.**
+
+### GATE 2026-08-14 SCORED — bnb + doge capacity: BOTH DROP (terminal, 4wk branch)
+
+Registered command, run verbatim (criteria fixed 2026-07-17, before any new-coin data;
+bnb's date set by the 2026-08-01 DISPOSITION 1):
+`score_gates paper --sids fav_disagree,fav_disagree_live --symbol <coin> --since 2026-07-17T17:00`
+
+| coin | n | slugs | total | EV/fill | CI | WR | branch |
+|---|--:|--:|--:|--:|---|--:|---|
+| bnb | 13 | 8 | -$25.83 | -$1.987 | [-8.15,+5.52] | 38% | **DROP** |
+| doge | 31 | 24 | +$4.52 | +$0.146 | [-4.21,+4.99] | 52% | **DROP** |
+
+Neither PASSES (bnb n<30 and CI-lo<0; doge clears n>=30 but CI-lo=-4.21<0). Neither KILLS
+(both CI-hi>0; bnb's EV<0 sits at n=13, far below the n>=40 the KILL leg requires). So both
+land on the residual branch, and at 4 weeks that branch is terminal: **"still inconclusive at
+4wk => drop (thin-liq suspicion)"**. Recorded as DROPPED. They stay paper-only and keep
+collecting; no live grant for either without a FRESH pre-registration on new data. Leg 2
+(live-2 guarded) and the depth check were not run - they gate a PASS only.
+
+CONTEXT that makes the drop unsurprising, and reframes the coverage problem: over this same
+07-17 17:00 -> 08-14 window the twins' signal is overwhelmingly ONE coin.
+
+| coin | n | EV/fill | CI |
+|---|--:|--:|---|
+| hype | 164 | +$4.945 | [+3.06,+6.71] |
+| doge | 31 | +$0.146 | [-4.21,+4.99] |
+| eth | 18 | +$0.504 | [-5.90,+7.23] |
+| bnb | 13 | -$1.987 | [-8.15,+5.52] |
+| sol | 13 | +$5.202 | [-2.82,+11.41] |
+| btc | 7 | -$7.580 | [-10.47,+1.61] |
+| xrp | 6 | -$2.282 | [-10.44,+10.50] |
+
+hype is **65% of all twin signal** in the window and the only coin whose CI clears zero; the
+four ARMED coins together produce n=44 and not one of them is individually scoreable. The
+live book's starvation was never a bnb/doge question - it is entirely a hype question, and
+the hype answer is already registered (08-08 entry (4)): cheap-band `fav_disagree` on hype is
+n=9, CI [-7.60,+9.92], DOES NOT QUALIFY against the n>=30 AND CI-lo>0 bar. A same-day
+unregistered slice (`--sids fav_disagree_live --symbol hype`, no ask-band, since 06-19) reads
+n=17 +$8.81 CI[+2.37,+14.72]; it is NOT the registered metric and does not change the verdict.
+**No hype grant.** The 08-28 hype decision stays early_disagree_live-only, as registered.
+
+Execution evidence gathered 08-13 on the 26 REAL hype orders (all from the hi_live grant, all
+ask 0.47-0.59 i.e. inside the CLOSED >0.45 band): fill rate 9/26=35%, in-band depth median $0,
+filled -$1.711/fill vs missed +$4.798/fill CI[+0.61,+8.45] = **-$6.509/order** filled-minus-
+missed. Same adverse-selection signature as the 08-07 band closure. A zero-risk dry-run
+coverage soak (`EXEC_SOAK_DIR=data/live/soak_hype`, grant scoped to process env so live and
+.env are untouched) now records cheap-band hype preflight depth + would-fill decisions; it is
+DATA COLLECTION for the 08-28 decision, not a re-opening of the 08-08 verdict.
