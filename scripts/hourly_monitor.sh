@@ -68,4 +68,26 @@ fi
 #    shape as the Chainlink outage in (5), so it gets the same treatment.
 "$REPO/scripts/check_collector_liveness.sh" "$REPO/logs/combined.log"
 
+# 8) Research-frame staleness. joined_15m is the silent input to every atlas/edge_lab
+#    analysis, and unlike (6) NOTHING rebuilds it on a schedule — it only moves when someone
+#    runs the builder. On 2026-08-15 it was 3 weeks stale (built 07-24) and the Edge Hunt v4
+#    reveal scored 100 windows with an EMPTY sealed split before that was spotted. A gate
+#    reading a truncated window returns a confident WRONG verdict, and a terminal one-look
+#    gate cannot be re-taken. 7 days is the threshold: gate cadence is ~weekly.
+#    Rebuild: ./scripts/rebuild_canonical_frame.sh
+for f in joined_15m joined_15m_slim; do
+  p="$REPO/data/research/$f.parquet"
+  if [ ! -f "$p" ]; then
+    echo "[warn] research frame MISSING: $f.parquet — every atlas/edge_lab read will fail or fall back"
+  elif [ -n "$(find "$p" -mtime +7 2>/dev/null)" ]; then
+    echo "[warn] research frame STALE (>7d): $f.parquet built $(date -r "$p" '+%Y-%m-%d'). Any gate reading it scores a TRUNCATED window and looks fine doing it. Run: ./scripts/rebuild_canonical_frame.sh"
+  fi
+done
+#    The slim frame is what load_base() actually PREFERS, so a fresh joined + stale slim is
+#    silently equivalent to no rebuild at all. Flag that ordering explicitly.
+J="$REPO/data/research/joined_15m.parquet"; S="$REPO/data/research/joined_15m_slim.parquet"
+if [ -f "$J" ] && [ -f "$S" ] && [ "$J" -nt "$S" ]; then
+  echo "[warn] joined_15m is NEWER than joined_15m_slim — load_base() prefers the SLIM frame, so analyses are still reading the OLD data. Run: uv run python -c 'from research.analysis.edge_lab import build_slim; build_slim()'"
+fi
+
 echo "----- done -----"
