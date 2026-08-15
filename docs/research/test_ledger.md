@@ -1537,3 +1537,76 @@ missed. Same adverse-selection signature as the 08-07 band closure. A zero-risk 
 coverage soak (`EXEC_SOAK_DIR=data/live/soak_hype`, grant scoped to process env so live and
 .env are untouched) now records cheap-band hype preflight depth + would-fill decisions; it is
 DATA COLLECTION for the 08-28 decision, not a re-opening of the 08-08 verdict.
+
+### EDGE HUNT v4 REVEALED 2026-08-15 — ZERO new families; early-timing thread CLOSED
+
+One look, as sealed 2026-08-01. Window 07-24 00:00 -> 08-14 23:59 UTC, all 7 coins,
+official labels, guarded fills. Artifacts: `data/research/edge_atlas/` (v3 backed up to
+`edge_atlas_v3/`), runner `scripts/run_v4_reveal.sh`, code `research/analysis/atlas_v4.py`
++ `v4b_timing_cells.py`, frame `data/research/v4_frame/`.
+
+TWO INFRASTRUCTURE DEFECTS had to be fixed BEFORE the look was meaningful. Both would have
+produced a confident, wrong reveal, and both matter for every remaining gate:
+1. **The research frame was 3 weeks stale.** `joined_15m.parquet` last built 2026-07-24
+   10:06 = ~10h of a 21-day window, 4 of 7 coins. First run reported `{'dev': 100}` windows
+   and an EMPTY sealed split. Rebuilt to a SCRATCH path (`data/research/v4_frame/`,
+   13.2M rows, 7 coins) because `joined.build()` writes to the canonical path and a dated
+   rebuild would have replaced full history with a 3-week slice. Canonical file untouched.
+   **The 08-20 R1 gate needs this same rebuild** (its own note already says so).
+2. **The label path was stale AND prereg-violating.** `edge_lab.cl_outcomes` ->
+   `official_outcome_by_slug()` left-merges official onto the RECONSTRUCTED frame, so (a)
+   its slug universe is capped by that stale parquet - it surfaced **96** of the window's
+   14,690 windows - and (b) it FALLS BACK to reconstructed Chainlink for uncovered slugs,
+   which the prereg forbids ("official only, never imputed"). Switched to
+   `official_only_by_slug()` (its own docstring warns of this trap): 14,687 windows, **3**
+   dropped. NOTE FOR FOLLOW-UP: any past analysis routed through `cl_outcomes` on slugs
+   missing an official label silently took the ~4:1-optimistic reconstructed label.
+
+**V4a - ATLAS v4.** 11,753,069 ticks -> 791,776 obs, 14,687 windows. Splits dev 6,706 /
+holdout 2,688 / future 5,296 windows (prereg's 07-24..08-06 selection block carried by the
+instrument's dev+holdout pair, its sealed 08-07..08-14 by `future`). 1,350 cells, BH family
+1,085.
+
+| outcome | result |
+|---|---|
+| POSITIVE candidates (dev CI-lo>0 + holdout sign + BH) | **0 of 1,085** |
+| new-cell claims | **NONE** - nothing to promote |
+| negative candidates | 312 -> confirmed 223, strong 128 |
+
+*Registered outcome 1, the PERSISTENCE VERDICT on the live cheap-disagree family*
+(CHEAP | ask <= 0.45 | tl120-300 | D = fav_disagree_live's own region), per $1 net of slip:
+**dev +4.91% (n=2,655), holdout +11.35% (n=1,125)** - positive in BOTH blocks. **No decay.**
+The standing stop rules are NOT tripped. But per-cell it is underpowered: only 2 of 68 cells
+have dev CI-lo>0 and neither survives BH, so the correct reading is "alive, not confirmed",
+not "confirmed edge". This is a region-level read (every qualifying tick is an obs), not the
+strategy's realized first-tick EV.
+
+*Harvest overlay.* No ENABLED strategy trades a confirmed-negative region: max coverage of
+any confirmed-NEG cell is fav_disagree 0.187, det_lwd_live 0.230, fav_lowvol 0.221,
+fav_momentum 0.167, early_disagree_live 0.065, xb 0.009. The two books that ARE deep in
+negative territory - `tadiv_approx_ret3_v1` (0.889, 105 cells >= 0.5) and `tadiv_approx_v1`
+(0.734, 22 cells) - are **already disabled**, so the atlas independently reproduces a kill
+already taken. Instrument validation, no new action.
+
+**V4b - the two FROZEN timing cells: BOTH FAIL.** Pooled over the whole window, official
+labels, guarded fills, registered bar n>=40 AND CI-lo>0 with BH k=2. CI is the prereg's own
+95% [p2.5,p97.5] (score_gates convention) - deliberately NOT edge_atlas's internal 5/95.
+
+| cell | n | net/$1 | CI95 | WR | p_pos | BH | verdict |
+|---|--:|--:|---|--:|--:|--:|---|
+| CHEAP\|a0.35-0.40\|tl450-900\|cl2-5\|D | 797 | +0.080 | [-0.013,+0.173] | 41% | 0.0436 | pass | **FAIL** |
+| CHEAP\|a0.30-0.35\|tl450-900\|cl5-12\|D | 127 | +0.012 | [-0.236,+0.260] | 33% | 0.4611 | fail | **FAIL** |
+
+Cell 1 is a NEAR-MISS: it clears n, is BH-significant one-sided, and fails only on CI-lo by
+0.013. Under the atlas instrument's internal 90% interval it would likely have passed. The
+prereg registered 95% for V4b and that is what was applied. Recorded, NOT re-cut - "no grid
+iteration, no re-cutting after seeing results" is the whole point of a sealed registration.
+**The early-timing disagree thread is CLOSED permanently** (second and last look under the
+two-strikes convention; it also failed forward on 07-17).
+
+**COMBINED TERMINAL BRANCH.** Both V4a-new-cells and V4b failed => per the sealed text: no
+fresh registration on this window's data; the next campaign requires the next 3-week block,
+**earliest 2026-09-05**, with a new pre-registration. Standing posture reaffirmed by
+evidence, not assertion: **coverage of the surviving edge beats discovery.** Four campaigns
+(v2 confirmed 4/4 cells that later decayed; v3, v4) have now produced zero durable new
+families, while the one surviving book is starved by coin coverage.
