@@ -4,6 +4,69 @@
 
 ---
 
+## 2026-08-15 - EDGE HUNT v4 REVEALED: zero new families; discovery pipeline is now empty
+
+The sealed one look ran (ledger entry "EDGE HUNT v4 REVEALED 2026-08-15"). Result, in one
+line: **0 positive candidates out of a 1,085-cell BH family, and both frozen timing cells
+failed.** Both legs failing fires the sealed terminal branch - no fresh registration on this
+window; next campaign earliest **2026-09-05** with a new pre-registration.
+
+**What DID survive is the thing already deployed.** The persistence verdict on the live
+cheap-disagree family (fav_disagree_live's own region: CHEAP, ask<=0.45, tl120-300, D) is
+**positive in BOTH blocks - dev +4.91%/$1 (n=2,655), holdout +11.35%/$1 (n=1,125)**. No
+decay; the standing stop rules are not tripped. Per-cell it is underpowered (2 of 68 cells
+with dev CI-lo>0, none surviving BH), so it reads "alive, not confirmed". Harvest overlay:
+no ENABLED strategy sits in a confirmed-negative region (max coverage 0.23); the two that do
+(both tadiv twins, 0.89 / 0.73) are already disabled - the atlas reproduced a kill we had
+already made, which is a clean validation of the instrument.
+
+V4b near-miss, recorded and NOT re-cut: `CHEAP|a0.35-0.40|tl450-900|cl2-5|D` n=797
++8.0%/$1, BH-significant one-sided, failing only on the registered 95% CI-lo by 0.013. Under
+the atlas's internal 90% interval it would likely have passed. The prereg registered 95%; a
+sealed registration is worth nothing if it gets re-cut once the answer is visible. The
+early-timing thread is CLOSED permanently.
+
+**TWO INFRASTRUCTURE DEFECTS nearly produced a confident wrong reveal** (full detail in the
+ledger). (1) The canonical research frame `joined_15m.parquet` is **3 weeks stale** (built
+07-24 10:06): it held ~10h of a 21-day window and 4 of 7 coins, and the first run reported
+100 windows with an EMPTY sealed split. (2) `edge_lab.cl_outcomes` caps its slug universe at
+that stale frame (**96** of 14,690 windows surfaced) and falls back to reconstructed
+Chainlink labels the prereg forbids. Fixed with a SCRATCH rebuild (`data/research/v4_frame/`,
+7 coins; canonical untouched) + `official_only_by_slug()`.
+
+**Blast-radius audit of (2), so it is not left as a vague worry:** the reconstructed fallback
+fired on only **53 slugs (0.22%)** of the reconstructed universe, and `score_gates.py` does
+NOT route through `cl_outcomes` at all (it reads `official_outcomes.parquet` directly). So
+**every dated gate read is clean** - the rung reads, R1/R2/R4, the capacity gates, the 08-14
+bnb/doge terminal. The contamination risk was narrow, not systemic. (Where both labels exist
+they disagree 6.54%, which is exactly why official-only is the standard.)
+
+**THE STANDING LIABILITY, and the next thing that will bite:** the canonical frame is still
+3 weeks stale. The **08-20 R1 gate reads it** and will silently score a truncated window the
+same way v4 nearly did; 08-21 and 08-24 have the same exposure. A canonical rebuild is
+maintenance, not a decision - but it OVERWRITES the single most depended-on artifact (2.1 GB)
+and `joined.build()` defaults to 4 coins, so it needs a deliberate call on coin set before
+running. NOT done unilaterally. Recommended: rebuild canonical through today at the existing
+4-coin default (preserves every consumer's semantics), keep the 7-coin frame separate for
+new-coin work.
+
+**Strategic position after four campaigns.** v2 confirmed 4/4 cells that later decayed; v3
+and v4 produced zero durable new families. Discovery has now returned nothing for three
+consecutive campaigns while the ONE surviving book earns +4.9%/+11.4% in its region and
+cannot get fills because of coin coverage (08-14: bnb/doge dropped; hype's cheap band does
+not qualify; 65% of twin signal is on hype). The doctrine's posture - coverage beats
+discovery - is now supported by evidence rather than assertion. It also sharpens the 08-28
+freeze question: the freeze would begin with a demonstrably live edge that cannot scale and
+no discovery pipeline left to change that. That remains a PORTFOLIO.md-level user decision.
+
+**Next:** (1) user call on the canonical frame rebuild (blocks 08-20/21/24 correctness);
+(2) 08-17 rung read - unsampleable, mechanical outcome "stay $10", must be recorded as
+insufficient sample NOT an EV failure; (3) 08-20 R1 xb terminal gate (needs the rebuild +
+`research.dataset.xbook`) and the hype coverage soak read; (4) 08-21 hi_live rung + R2 final
+look + xh5y keep-or-kill; (5) 08-24 knife gate; (6) 08-28 early_disagree hype grant, then
+the freeze.
+
+
 ## 2026-08-13 - C2 deployed; the coin-grant question answered (and my recommendation reversed)
 
 Acted on the two standing blockers. One shipped; the other turned out to be based on a
