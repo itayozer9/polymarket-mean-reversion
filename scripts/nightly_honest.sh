@@ -29,8 +29,12 @@ uv run pytest tests/research/test_resettle_official.py -q --no-header 2>&1 | tai
 # Drop the ignore if lightgbm is ever installed.
 SUITE=$(nice -n 19 uv run pytest -q --ignore=tests/sweep_v2/test_surrogate.py 2>&1 | tail -1)
 echo "[nightly_honest] suite: $SUITE"
-case "$SUITE" in
-  *failed*|*error*|*Error*)
+# ${SUITE:l} lowercases (zsh): pytest prints "ERROR" for a COLLECTION failure, which
+# `*error*` would miss case-sensitively — and a collection error is the loudest thing
+# there is (a test module that cannot even import). Silently calling that green is the
+# failure this check exists to prevent, so match case-insensitively and include "no tests".
+case "${SUITE:l}" in
+  *failed*|*error*|*"no tests ran"*)
     echo "[warn] TEST SUITE RED — $SUITE"
     echo "[warn]   reproduce: nice -n 19 uv run pytest -q --ignore=tests/sweep_v2/test_surrogate.py" ;;
 esac
