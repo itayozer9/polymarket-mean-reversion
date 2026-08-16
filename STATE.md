@@ -4,6 +4,54 @@
 
 ---
 
+## 2026-08-16 - maintenance day: the suite had been RED for 8 days
+
+No trading decisions today. The user asked why there had been no trades; the answer is in the
+diary (coverage, not a fault: 4 tradeable signals in 8 days, 67% of signal on un-allowlisted
+hype). What the follow-up verification turned up matters more.
+
+**THE SUITE HAS BEEN RED SINCE 2026-08-08 AND NOTHING NOTICED.** Retiring `det_lwd_live` (a
+deliberate user decision) broke 3 test modules that each hard-coded the armed set
+`{det_lwd_live, fav_disagree_live, fav_disagree_hi_live}`. It surfaced today only because a
+status check happened to run pytest. A red suite hides real regressions - that is the cost,
+not the three failing asserts, which were doing their job. Fixed BOTH halves: the assertion,
+and the duplication that turned one decision into three failures (`tests/armed_set.py` now
+holds `ARMED_LIVE_IDS` once; kept hard-coded on purpose, since deriving it from
+strategies.yaml would be a tautology that silently blesses an accidental `live: true`).
+**620 passed, 5 skipped.** `tests/sweep_v2/test_surrogate.py` still fails COLLECTION on a
+missing lightgbm - pre-existing env gap, left alone.
+
+**Root-caused it rather than just fixing it.** Nothing ran the suite on a schedule (the
+nightly ran ONE 4-test research file), so nightly_honest.sh now runs the full suite
+warn-only, nice'd, LAST - labels are the money-critical output and must never be blocked by
+a failing assert. This is the same silent-failure shape as the stale research frame found
+08-15: green lights staying green while something real is broken. That is now three
+instances (external CPU 06-06, heartbeat parse 06-12, DNS 08-09) plus these two.
+Self-review caught a bug in my own alarm before it shipped: pytest prints uppercase `ERROR`
+for a collection failure, which the case-sensitive `*error*` glob skipped, so an unimportable
+test module would have read green. Lowercased the match and pinned it against 5 output shapes.
+
+**Verifications:**
+- The 08-15 canonical rebuild fixed the `cl_outcomes` universe cap: **23,663 slugs ending
+  07-24 -> 31,416 ending 08-14**. The stale-label trap is substantially defused for future
+  analyses (the reconstructed FALLBACK still exists, but it fires on 54 slugs / 0.2%).
+- Nightly ran clean on the rebuilt frame (03:16Z, reconcile OK, labels 1.5h fresh).
+- Disk is NOT a risk: repo 30G, live ticks grow ~15 MB/day, 57G free. The 3.5G of
+  `.bak_20260815` frame backups are now redundant (rebuild verified) but left in place -
+  deleting a backup of the most depended-on artifact is a user call, not a cleanup.
+- **hype coverage soak, interim (n=4, do NOT read as a result):** 4 cheap-band decisions
+  captured 08-13/08-14 at quoted ask 0.28-0.41, all inside the 0.45 ceiling, zero skips.
+  But it has captured NOTHING since 08-14 18:41 because the signal drought hit it too, so
+  the **08-20 read will likely land at n~6-8, well short of the ~14 projected** - expect it
+  to be underpowered rather than decisive.
+
+**Next:** 08-17 rung read (unsampleable -> stay $10, record as INSUFFICIENT SAMPLE);
+08-20 R1 xb (needs an 08-15..08-20 frame top-up via ./scripts/rebuild_canonical_frame.sh,
+plus research.dataset.xbook) + the hype soak read; 08-21 xh5y keep-or-kill (it flipped
+NEGATIVE on official labels, +$74 08-13 -> -$62 08-16), R2 final look, hi_live rung;
+08-24 knife gate; 08-28 early_disagree hype grant, then the freeze.
+
+
 ## 2026-08-15 - EDGE HUNT v4 REVEALED: zero new families; discovery pipeline is now empty
 
 The sealed one look ran (ledger entry "EDGE HUNT v4 REVEALED 2026-08-15"). Result, in one
