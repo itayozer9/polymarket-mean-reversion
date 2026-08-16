@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO / "src"))
 from mean_reversion_live.adapters.arb_imports import TICK_DTYPE, Portfolio, HumanParams  # noqa: E402
 from mean_reversion_live.engine.determinism_state import DetParams, DeterminismState  # noqa: E402
 from mean_reversion_live.engine.paper_engine import _TICK_DTYPE_EXT, _row_dict_to_struct  # noqa: E402
+from tests.armed_set import ARMED_LIVE_IDS  # noqa: E402
 
 NAN = float("nan")
 
@@ -276,7 +277,7 @@ def test_yaml_block_parses_as_paper_and_live_untouched():
     # fav_disagree_hi_live added 2026-07-25: the ask 0.46-0.60 cohort of the fav_disagree edge
     # its sibling's 0.45 cap discards, $5 measurement rung, gate 2026-08-07.
     live_set = {s.id for s in strats if s.live}
-    assert live_set == {"det_lwd_live", "fav_disagree_live", "fav_disagree_hi_live"}
+    assert live_set == ARMED_LIVE_IDS
     assert by_id["early_disagree_live"].live is False   # demoted 06-18, paper twin runs on
     assert "det_d12_dual_live" not in by_id             # killed 06-18, pruned roster
 

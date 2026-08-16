@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO / "src"))
 from mean_reversion_live.adapters.arb_imports import TICK_DTYPE, Portfolio, HumanParams  # noqa: E402
 from mean_reversion_live.engine.determinism_state import DetParams, DeterminismState  # noqa: E402
 from mean_reversion_live.engine.print_model import PrintModel, load_print_model, p_settle_up  # noqa: E402
+from tests.armed_set import ARMED_LIVE_IDS  # noqa: E402
 
 # Tick struct with the engine's extended Chainlink fields (paper_engine._TICK_DTYPE_EXT).
 _EXT = np.dtype(TICK_DTYPE.descr + [
@@ -268,9 +269,11 @@ def test_load_print_model_real_artifact_and_yaml_registry():
     # still covered by the rest of this module; this assertion pins the deployed ROSTER.
     assert "oracle_fade_v1" not in by_id
     assert "psettle_ud_v1" not in by_id
-    # the live strategies are untouched: still live, still non-psettle
+    # the armed set is untouched, and nothing armed runs psettle
     # (det_d12_dual_live killed 2026-06-18 → absent from the loaded registry)
     assert "det_d12_dual_live" not in by_id
-    assert by_id["det_lwd_live"].live is True
-    assert by_id["det_lwd_live"].det_params.mode != "psettle"
-    assert by_id["fav_disagree_live"].live is True
+    assert {s.id for s in strats if s.live} == ARMED_LIVE_IDS
+    for sid in ARMED_LIVE_IDS:
+        assert by_id[sid].det_params.mode != "psettle"
+    # det_lwd_live is RETIRED from real money (2026-08-08) but its paper twin still runs
+    assert by_id["det_lwd_live"].live is False
