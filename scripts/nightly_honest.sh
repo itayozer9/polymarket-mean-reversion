@@ -16,4 +16,23 @@ uv run python -m research.analysis.resettle_official
 uv run python -m research.analysis.reconcile_executor
 uv run pytest tests/research/test_resettle_official.py -q --no-header 2>&1 | tail -1
 
+# Full suite — WARN-ONLY, and deliberately LAST. Nothing else ran it on a schedule, so
+# it sat RED for 8 days: the 2026-08-08 det_lwd_live retirement broke 3 modules that each
+# hard-coded the armed set, and it surfaced 08-16 only because a status check happened to
+# run pytest. A red suite hides real regressions; that is the cost, not the failing asserts.
+# Never allowed to abort the nightly (labels are the money-critical output; tests are the
+# canary), hence the pipe — `set -e` sees tail's status, not pytest's.
+# nice'd: this is ~10min and CPU-heavy, and on 2026-08-03 exactly this workload starved the
+# live executor's 2 Hz poll loop until two real intents aged out and were dropped.
+# The sweep_v2 ignore is a known environment gap (lightgbm absent) — it fails COLLECTION,
+# which would otherwise make this warn fire every night and train everyone to ignore it.
+# Drop the ignore if lightgbm is ever installed.
+SUITE=$(nice -n 19 uv run pytest -q --ignore=tests/sweep_v2/test_surrogate.py 2>&1 | tail -1)
+echo "[nightly_honest] suite: $SUITE"
+case "$SUITE" in
+  *failed*|*error*|*Error*)
+    echo "[warn] TEST SUITE RED — $SUITE"
+    echo "[warn]   reproduce: nice -n 19 uv run pytest -q --ignore=tests/sweep_v2/test_surrogate.py" ;;
+esac
+
 echo "[nightly_honest] OK $(date -u +%Y-%m-%dT%H:%MZ)"
