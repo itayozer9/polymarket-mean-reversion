@@ -4,6 +4,87 @@
 
 ---
 
+## 2026-08-28 - THE VERDICT: crypto discovery is closed; one live book + a forward probe
+
+The user asked the only question that matters: keep hunting, or give up. Full audit below.
+Answer: **the crypto edge hunt is over.** Not because the engineering failed - because the
+market is priced correctly where we can trade and closed where it is not.
+
+**The honest numbers, two independent sources.** 757 real fills, $3,575 deployed, 12 weeks:
+**-$17.59** on official labels. Polymarket's own user-pnl API over the same window (since
+06-05): **-$14.58**. A permutation test against "the market price is fair" gives **p=0.57**.
+That is a coin flip, not a small edge.
+
+**The structural finding (new today).** Calibration of the whole tape, 1.9M snapshots /
+31,975 settled windows, official labels, measured at the MID so the spread is removed:
+
+| price band | EV per $1 at mid |
+|---|---|
+| 0.30-0.50 | **-0.9%** |
+| 0.50-0.70 | +0.6% |
+| 0.70-0.90 | **+1.4%** |
+
+The favourite-longshot bias is real and it is the whole prize. It lives at 0.70-0.90 - the
+band rule 1 closed permanently for taker execution on 08-07. The band we ARE allowed to
+trade (<=0.45) is **negative before conditioning**. Edge where we cannot trade, clean
+execution where there is no edge. That is the box, and nothing opens it. Filled-minus-missed
+across the whole live ledger is **-$0.80/order** (filled -$0.08, missed +$0.72).
+
+Also: at tl<30s the book is EMPTY 35-45% of the time (ask_sum ~0.01). Any future late-window
+analysis must drop those rows or it will read a fake -60%/$1 longshot bias.
+
+**The one gate left unread was run today. It dies the same way.** `xb_5m15m_causal_v1` PASSES
+its registered R1 metric: n=442, **+$1.329/fill, CI [+0.46,+2.27]**. Split by ask:
+cheap band (0.05-0.45) n=125 +$0.634 **CI [-1.97,+3.13]** (nothing); 0.45-0.92 n=325 +$1.514
+CI [+0.78,+2.26]. **74% of its money is behind the closed door.** No promotion. R1 closes.
+
+**Doors re-checked against their own evidence, all correctly shut:** maker/spread capture
+(real trade tape: -1.44c to -2.5c adverse selection vs a 1c spread + 0.35c rebate);
+liquidity rewards (CLOB API returns `count: 0`, `holdingRewardsEnabled: false` - no pool
+exists); perp hedging (a 0/1 binary is unhedgeable, 84% of windows have no losing-side exit);
+copy-trading (survivorship-free excess +1.5c vs 3-3.5c entry cost).
+
+**USER DECISION (option B).** (1) Keep exactly one real-money book, `fav_disagree_live`,
+$10, cheap band, existing stop rule, unattended - a lottery ticket on the one region still
+scoring positive (atlas: dev +4.9%/$1, holdout +11.4%/$1), read in ~3 months. (2) No further
+crypto discovery. (3) Start the ONE genuinely untested thing: slow non-crypto markets.
+
+**Why slow markets are not just "another idea".** Every edge here died to one mechanism -
+informed flow racing the same spot feed. "Will X happen by date Y" markets have no feed to
+race, so that mechanism is absent by construction. It is a different counterparty, not a
+different parameter.
+
+**It cannot be backtested, and that is the finding that shaped the design.** Polymarket's
+CLOB `prices-history` is **purged after ~4 weeks** (verified: markets ending 08-01..08-28
+return history; 07-01..08-01 return none, at every volume tier). There is no back-data. So
+`scripts/probe_slow_markets.py` harvests FORWARD, weekly, before deletion. Seeded today with
+1,150 resolved markets (07-29..08-28). Today's read is noise and the script says so -
+median market volume is $4,332 and the liquid buckets hold 5-13 markets. **Do not read it
+before ~12 weeks.** The illiquid tiers show a huge fake longshot bias that is stale
+last-trade price, not mispricing.
+
+**Ops done today.** Executor was down since 08-26 on the known `/auth/derive-api-key` hang
+(memory: clob-auth-derive-hang); auth re-tested clean in 0.3s, relaunched in the dead zone,
+backlog replay placed no orders (ok-fills 773 unchanged). Preflight: $663.64 collateral,
+allowances set, book armed at $100 bankroll / $50 daily cap / +$56.21 realized. Engine,
+macro collector and claim loop were already back up with both LaunchAgents loaded.
+**STILL NEEDED: the `37 * * * * hourly_monitor.sh` cron line is the executor's supervisor
+and is still VACATION-DISABLED. Until the user restores it there is no self-healing.**
+
+**Disk: 19G -> 17G.** Deleted `data/research/{v4_frame,ta_features,binance_1s,binance_deriv}`
+(closed terminal campaign; tadiv killed; external inputs rejected), the `signals*` files of
+the 12 disabled strategies, rotated `combined.log.[1-5]`, stale `strategies.yaml.bak.*`, and
+truncated a 50MB claim_loop.log. **Deliberately KEPT `trades_detailed.jsonl` everywhere** -
+`resettle_official` streams it to rebuild the honest scoreboard, so deleting a killed
+strategy's dir would erase the evidence for why it was killed. Verified after: 4/4 resettle
+tests pass and both killed sids re-settle clean. Not touched: `data/archive/
+reset_chainlink_20260605` (2.4G, one-of-a-kind raw snapshot) and `joined_5m.parquet` (1.3G,
+its rebuild cache was already deleted). Biggest lever left is the 2.2G of live
+`signals.jsonl` across 17 enabled strategies - `start_all.sh` gzips it ~59x at boot.
+
+**Next:** (1) user restores the cron line (self-healing + the weekly probe); (2) nothing
+until ~2026-11-28: read the live book and the slow-market probe together. No research.
+
 ## 2026-08-16 - maintenance day: the suite had been RED for 8 days
 
 No trading decisions today. The user asked why there had been no trades; the answer is in the
